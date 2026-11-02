@@ -1,0 +1,59 @@
+name: Build downloads
+
+# Push a tag such as v0.8.3 (git tag v0.8.3 && git push origin v0.8.3) and the Mac and Windows apps are
+# built and attached to a new Release. "Run workflow" on the Actions page makes test builds without a Release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e ".[dev]"
+      - run: pytest -q -x
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, name: Windows}
+          - {os: macos-14, name: Mac-AppleSilicon}
+          - {os: macos-13, name: Mac-Intel}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -e . pyinstaller
+      - run: pyinstaller --noconfirm installer/BootTool.spec
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/BootTool -DestinationPath BootTool-${{ matrix.name }}.zip
+      - name: Zip (Mac)
+        if: runner.os == 'macOS'
+        run: cd dist && zip -ry ../BootTool-${{ matrix.name }}.zip BootTool
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BootTool-${{ matrix.name }}
+          path: BootTool-${{ matrix.name }}.zip
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions: {contents: write}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: {path: out, merge-multiple: true}
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.zip
+          generate_release_notes: true
