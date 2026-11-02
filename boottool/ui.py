@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+import subprocess
 import threading
 import time
 import uuid
@@ -134,7 +135,7 @@ class Engine:
             result = {
                 "svg": svg, "mode": prep.mode, "size": list(prep.size),
                 "scale": round(prep.scale, 3), "stats": svg_stats(svg),
-                "scores": score_svg(svg, prep), "ink": prep.ink,
+                "scores": _scores(svg, prep), "ink": prep.ink,
             }
             result["ms"] = int((time.perf_counter() - t0) * 1000)
             return result
@@ -199,6 +200,14 @@ def download_response(engine: "Engine", req: dict):
         if req.get("kind") == "zip":
             return plates_zip(job), "application/zip"
         return layered_svg(job).encode("utf-8"), "image/svg+xml"
+
+
+def _scores(svg, prep) -> dict:
+    """The self-check needs an SVG rasteriser (rsvg-convert or cairosvg). Without one the tool still works; the check is just skipped."""
+    try:
+        return score_svg(svg, prep)
+    except (RuntimeError, OSError, subprocess.CalledProcessError):
+        return {"ssim_target": None, "ssim_source": None, "mae_target": None}
 
 
 def design_response(engine: "Engine", req: dict) -> dict:

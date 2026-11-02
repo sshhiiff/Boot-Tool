@@ -63,3 +63,14 @@ def test_bad_inputs(server):
     assert _post(server + "/api/upload", b"not an image")[0] == 400
     code, _ = _post(server + "/api/trace", json.dumps({"id": "nope"}).encode(), "application/json")
     assert code == 400
+
+
+def test_trace_works_without_an_svg_rasteriser(server, lineart, monkeypatch):
+    """Downloaded apps have no rsvg/cairo: the self-check is skipped, not fatal."""
+    import boottool.score as sc
+    monkeypatch.setattr(sc.shutil, "which", lambda name: None)
+    monkeypatch.setitem(__import__("sys").modules, "cairosvg", None)
+    code, body = _post(server + "/api/upload", lineart.read_bytes())
+    image_id = json.loads(body)["id"]
+    code, body = _post(server + "/api/trace", json.dumps({"id": image_id, "session": "n", "seq": 1, "params": {}}).encode(), "application/json")
+    assert code == 200 and json.loads(body)["scores"]["ssim_target"] is None

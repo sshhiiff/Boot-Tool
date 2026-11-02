@@ -983,7 +983,7 @@ function show(j) {
   svgURL = URL.createObjectURL(new Blob([svgText], {type: "image/svg+xml"})); $("#svgimg").src = svgURL;
   if (tool === "convert") {
     $("#dl").disabled = false; setStage(natW, natH, "convert"); layoutOrig(); lastRes = null; saveToLibrary();
-    $("#stats").innerHTML = cell("Library", `<span id="libcell">${libName ? "Saved as " + esc(libName) : "Saving…"}</span>`) + cell("Size", j.size.join("×")) + cell("Paths", j.stats.path_count.toLocaleString()) + cell("Nodes", j.stats.node_count.toLocaleString()) + cell("File", kb(j.stats.bytes)) + cell("Match", j.scores.ssim_target.toFixed(3)) + cell("Mode", (j.mode === "lineart" ? "Line art" : "Colour") + " · " + j.ms + " ms");
+    $("#stats").innerHTML = cell("Library", `<span id="libcell">${libName ? "Saved as " + esc(libName) : "Saving…"}</span>`) + cell("Size", j.size.join("×")) + cell("Paths", j.stats.path_count.toLocaleString()) + cell("Nodes", j.stats.node_count.toLocaleString()) + cell("File", kb(j.stats.bytes)) + cell("Match", (j.scores.ssim_target == null ? "n/a" : j.scores.ssim_target.toFixed(3))) + cell("Mode", (j.mode === "lineart" ? "Line art" : "Colour") + " · " + j.ms + " ms");
     return;
   }
   const first = !lastRes || lastRes.plates.map(x => x.name).join("|") !== j.plates.map(x => x.name).join("|"); lastRes = j; plateView = j.view;
