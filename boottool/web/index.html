@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>boottool</title>
+<style>
+:root {
+  --bg: #f4f2ee; --panel: #fbfaf8; --line: #dcd8d0; --ink: #1d1b18; --muted: #6f6a60;
+  --accent: #b4410f; --accent-ink: #fff; --track: #d9d4ca; --stage: #e6e2da; --chip: #ece8e0;
+  --shadow: 0 1px 2px rgba(0,0,0,.08), 0 6px 20px rgba(0,0,0,.08);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #17161400; --bg: #171614; --panel: #1f1e1b; --line: #34312c; --ink: #ece8e0; --muted: #9a948a;
+    --accent: #e8743b; --accent-ink: #1a0f08; --track: #3a3730; --stage: #121110; --chip: #2a2824;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 6px 20px rgba(0,0,0,.4);
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: grid; grid-template-columns: 340px 1fr; grid-template-rows: 100vh; overflow: hidden; }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---- sidebar */
+aside { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.brand { padding: 16px 18px 10px; display: flex; align-items: baseline; gap: 10px; }
+.brand b { font-size: 18px; letter-spacing: -.01em; }
+.brand span { color: var(--muted); font-size: 12px; }
+.scroll { overflow-y: auto; padding: 0 18px 18px; flex: 1; }
+.group { margin-top: 18px; }
+.group > h2 { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.presets button, .seg button, .btn { border: 1px solid var(--line); background: var(--chip); border-radius: 7px; padding: 6px 10px; }
+.presets button:hover, .btn:hover { border-color: var(--accent); }
+.ctl { margin: 12px 0 0; }
+.ctl .row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.ctl label { font-weight: 600; cursor: default; }
+.ctl output { font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600; }
+.ctl small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+input[type=range] { width: 100%; margin: 6px 0 0; accent-color: var(--accent); }
+select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); background: var(--chip); border-radius: 7px; margin-top: 6px; }
+.check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; }
+.check input { margin-top: 3px; accent-color: var(--accent); }
+.check small { color: var(--muted); display: block; font-size: 12px; }
+details { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
+summary { cursor: pointer; font-weight: 600; }
+textarea { width: 100%; min-height: 84px; resize: vertical; margin-top: 8px; padding: 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--chip); font: 12px/1.4 ui-monospace, Menlo, monospace; }
+.foot { border-top: 1px solid var(--line); padding: 12px 18px; display: grid; gap: 8px; }
+.primary { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 8px; padding: 10px 12px; font-weight: 700; }
+.primary:disabled, .btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ---- main */
+main { display: grid; grid-template-rows: auto 1fr auto; min-width: 0; min-height: 0; }
+.bar { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.seg { display: inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 7px 0 0 7px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 7px 7px 0; }
+.seg button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); position: relative; }
+.bar .opac { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.bar .opac input { width: 90px; margin: 0; }
+.spacer { flex: 1; }
+#busy { color: var(--muted); font-size: 12px; min-width: 70px; text-align: right; }
+#busy.on::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 6px; border-radius: 50%; border: 2px solid var(--accent); border-right-color: transparent; animation: spin .7s linear infinite; vertical-align: -1px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.viewport { position: relative; overflow: hidden; background: var(--stage); touch-action: none; cursor: grab; min-height: 0; }
+.viewport.drag { cursor: grabbing; }
+#stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.pane { position: absolute; top: 0; overflow: hidden; box-shadow: var(--shadow); }
+.pane img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; user-select: none; -webkit-user-drag: none; }
+.pane.paper { background: #fff; }
+.drop { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; padding: 24px; }
+.drop > div { border: 2px dashed var(--line); border-radius: 16px; padding: 40px 48px; max-width: 460px; }
+.drop h1 { margin: 0 0 6px; font-size: 20px; }
+.drop p { margin: 4px 0; color: var(--muted); }
+.viewport.over .drop > div { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.status { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 14px; border-top: 1px solid var(--line); background: var(--panel); font-size: 12px; color: var(--muted); min-height: 38px; align-items: center; }
+.status .chip { background: var(--chip); border-radius: 999px; padding: 2px 10px; }
+.status .chip b { color: var(--ink); font-weight: 600; }
+#toast { position: fixed; right: 16px; bottom: 56px; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 8px; max-width: 360px; box-shadow: var(--shadow); opacity: 0; transform: translateY(6px); transition: .2s; pointer-events: none; z-index: 5; }
+#toast.on { opacity: 1; transform: none; }
+@media (max-width: 820px) { body { grid-template-columns: 1fr; grid-template-rows: auto 70vh; overflow: auto; } aside { border-right: 0; border-bottom: 1px solid var(--line); } }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><b>boottool</b><span>image → clean SVG</span></div>
+  <div class="scroll">
+    <div class="group">
+      <h2>Presets</h2>
+      <div class="presets" id="presets"></div>
+    </div>
+    <div id="controls"></div>
+    <details>
+      <summary>Batch command</summary>
+      <small style="color:var(--muted)">Runs these exact settings over a whole folder. Replace the two folder paths.</small>
+      <textarea id="cmd" readonly aria-label="Batch command"></textarea>
+      <button class="btn" id="copy" style="margin-top:8px">Copy command</button>
+    </details>
+  </div>
+  <div class="foot">
+    <button class="primary" id="save" disabled>Save SVG</button>
+    <button class="btn" id="open">Open another image…</button>
+  </div>
+</aside>
+
+<main>
+  <div class="bar">
+    <div class="seg" role="group" aria-label="View">
+      <button data-view="vector" aria-pressed="false" title="Vector only (1)">Vector</button>
+      <button data-view="overlay" aria-pressed="true" title="Vector over original (2)">Overlay</button>
+      <button data-view="split" aria-pressed="false" title="Side by side (3)">Side by side</button>
+      <button data-view="original" aria-pressed="false" title="Original only (4)">Original</button>
+    </div>
+    <label class="opac" id="opacWrap">Original opacity
+      <input type="range" id="opac" min="0" max="100" value="35" aria-label="Original opacity in overlay view">
+    </label>
+    <div class="seg" role="group" aria-label="Zoom">
+      <button id="zout" title="Zoom out" aria-label="Zoom out">−</button>
+      <button id="zfit" title="Fit to window (F)">Fit</button>
+      <button id="z100" title="Actual size">100%</button>
+      <button id="zin" title="Zoom in" aria-label="Zoom in">+</button>
+    </div>
+    <span id="zlabel" style="color:var(--muted);font-size:12px;min-width:44px"></span>
+    <div class="spacer"></div>
+    <span id="busy" role="status"></span>
+  </div>
+  <div class="viewport" id="viewport">
+    <div id="stage" hidden>
+      <div class="pane paper" id="paneA"><img id="orig" alt="Original image" draggable="false"></div>
+      <div class="pane" id="paneB"><img id="vec" alt="Traced vector" draggable="false"></div>
+    </div>
+    <div class="drop" id="drop">
+      <div>
+        <h1>Drop an image here</h1>
+        <p>or paste one, or <button class="btn" id="pick">choose a file</button></p>
+        <p>PNG, JPG, GIF, WebP, BMP, TIFF</p>
+      </div>
+    </div>
+  </div>
+  <div class="status" id="status"><span>No image loaded.</span></div>
+</main>
+<input type="file" id="file" accept="image/*" hidden>
+<div id="toast" role="alert"></div>
+
+<script>
+"use strict";
+// ------------------------------------------------------------------ control definitions
+const SECTIONS = [
+  { title: "Resolution and threshold", items: [
+    { key: "upscale", label: "Resolution boost", min: 1, max: 6, step: 0.25, fmt: v => v.toFixed(2).replace(/\.?0+$/, "") + "×",
+      hint: "Enlarges the image before tracing. 1× keeps the original pixel grid (crunchy); 3–4× suits low-res scans." },
+    { key: "level", label: "Black / white cut", min: 0, max: 254, step: 1, fmt: v => v === 0 ? "Auto" : String(v),
+      hint: "Like Photoshop's Threshold. Higher keeps more ink. Auto picks a level for you." },
+  ]},
+  { title: "Detail and grit", items: [
+    { key: "speckle", label: "Speckle cleanup", min: 0, max: 200, step: 1, fmt: v => v === 0 ? "Off" : v + " px",
+      hint: "Low keeps floating specks and broken bits. High wipes them away." },
+    { key: "smooth_sigma", label: "Edge smoothness", min: 0, max: 3, step: 0.05, fmt: v => v.toFixed(2),
+      hint: "0 gives hard, pixelated edges. Higher gives soft, rounded edges." },
+    { key: "epsilon", label: "Path simplification", min: 0.1, max: 6, step: 0.05, fmt: v => v.toFixed(2),
+      hint: "Higher means fewer points and blockier outlines. Lower follows every wobble." },
+    { key: "corner_deg", label: "Corner sharpness", min: 90, max: 179, step: 1, fmt: v => v + "°",
+      hint: "Higher keeps more points sharp. Lower rounds them off." },
+  ]},
+  { title: "Mode", items: [
+    { key: "mode", label: "Image type", type: "select", options: [["auto", "Auto-detect"], ["lineart", "Line art (black ink)"], ["color", "Colour"]] },
+    { key: "threshold", label: "Cut method", type: "select", showIf: s => s.mode !== "color",
+      options: [["otsu", "Otsu (global)"], ["adaptive", "Adaptive (uneven lighting)"]] },
+    { key: "ink", label: "Ink colour", type: "select", showIf: s => s.mode !== "color",
+      options: [["#000000", "Black"], ["auto", "Match the source"]] },
+    { key: "colors", label: "Colours", min: 2, max: 24, step: 1, fmt: v => String(v), showIf: s => s.mode !== "lineart",
+      hint: "Palette size for colour images." },
+    { key: "denoise", label: "Denoise first", type: "check", hint: "Turn off for the grittiest result." },
+    { key: "normalize_background", label: "Flatten paper tone", type: "check",
+      hint: "Removes stains and uneven paper colour. Turn off to let them become ink." },
+  ]},
+  { title: "Advanced", items: [
+    { key: "max_side", label: "Largest working size", min: 1000, max: 8000, step: 100, fmt: v => v + " px",
+      hint: "Upscaling stops here. Higher is sharper but slower." },
+  ]},
+];
+const PRESETS = [
+  { name: "Clean",            set: { upscale: 3, speckle: 40, smooth_sigma: 1.0, epsilon: 1.5 } },
+  { name: "Like Illustrator", set: { upscale: 3, speckle: 8, smooth_sigma: 0.6, epsilon: 0.75 } },
+  { name: "Crunchy",          set: { upscale: 1, speckle: 0, smooth_sigma: 0.2, epsilon: 0.35, denoise: false } },
+  { name: "Gritty",           set: { upscale: 2, speckle: 0, smooth_sigma: 0.1, epsilon: 0.3, denoise: false, normalize_background: false } },
+];
+const FLAG = { upscale: "--upscale", level: "--level", speckle: "--speckle", smooth_sigma: "--smooth-sigma",
+  epsilon: "--epsilon", corner_deg: "--corner-deg", mode: "--mode", threshold: "--threshold",
+  colors: "--colors", ink: "--ink", max_side: "--max-side" };
+const BOOLFLAG = { denoise: "denoise", normalize_background: "normalize-background" };
+
+// ------------------------------------------------------------------ state
+const $ = id => document.getElementById(id);
+const S = { id: null, name: "image", w: 0, h: 0, params: {}, defaults: {}, view: "overlay",
+            svgUrl: null, k: 1, tx: 0, ty: 0, result: null, opac: 0.35 };
+const widgets = {};
+
+function toast(msg) {
+  const t = $("toast"); t.textContent = msg; t.classList.add("on");
+  clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("on"), 4200);
+}
+
+// ------------------------------------------------------------------ build controls
+function buildControls() {
+  const root = $("controls"); root.innerHTML = "";
+  for (const sec of SECTIONS) {
+    const g = document.createElement("div"); g.className = "group";
+    g.innerHTML = `<h2>${sec.title}</h2>`;
+    for (const it of sec.items) g.appendChild(makeControl(it));
+    root.appendChild(g);
+  }
+  refreshVisibility();
+}
+function makeControl(it) {
+  const wrap = document.createElement("div"); wrap.dataset.key = it.key;
+  const id = "c_" + it.key;
+  if (it.type === "check") {
+    wrap.className = "check";
+    wrap.innerHTML = `<input type="checkbox" id="${id}"><div><label for="${id}" style="font-weight:600">${it.label}</label><small>${it.hint || ""}</small></div>`;
+    const el = wrap.querySelector("input");
+    el.addEventListener("change", () => setParam(it.key, el.checked));
+    widgets[it.key] = { it, wrap, set: v => { el.checked = !!v; } };
+  } else if (it.type === "select") {
+    wrap.className = "ctl";
+    wrap.innerHTML = `<label for="${id}">${it.label}</label><select id="${id}">${it.options.map(o => `<option value="${o[0]}">${o[1]}</option>`).join("")}</select>`;
+    const el = wrap.querySelector("select");
+    el.addEventListener("change", () => setParam(it.key, el.value));
+    widgets[it.key] = { it, wrap, set: v => { el.value = v; } };
+  } else {
+    wrap.className = "ctl";
+    wrap.innerHTML = `<div class="row"><label for="${id}" title="Double-click to reset">${it.label}</label><output id="${id}_o"></output></div>
+      <input type="range" id="${id}" min="${it.min}" max="${it.max}" step="${it.step}"><small>${it.hint || ""}</small>`;
+    const el = wrap.querySelector("input"), out = wrap.querySelector("output");
+    el.addEventListener("input", () => setParam(it.key, parseFloat(el.value)));
+    wrap.querySelector("label").addEventListener("dblclick", () => setParam(it.key, S.defaults[it.key], true));
+    widgets[it.key] = { it, wrap, set: v => { el.value = v; out.textContent = it.fmt(+v); } };
+  }
+  return wrap;
+}
+function syncWidgets() { for (const k in widgets) widgets[k].set(S.params[k]); refreshVisibility(); updateCommand(); }
+function refreshVisibility() {
+  for (const k in widgets) { const w = widgets[k]; if (w.it.showIf) w.wrap.hidden = !w.it.showIf(S.params); }
+}
+function buildPresets() {
+  const root = $("presets");
+  for (const p of [...PRESETS, { name: "Reset", set: null }]) {
+    const b = document.createElement("button"); b.textContent = p.name;
+    b.addEventListener("click", () => {
+      S.params = Object.assign({}, S.defaults, p.set || {});
+      syncWidgets(); schedule(0);
+    });
+    root.appendChild(b);
+  }
+}
+function setParam(k, v, resync) {
+  S.params[k] = v;
+  if (resync) syncWidgets(); else { widgets[k] && widgets[k].set(v); refreshVisibility(); updateCommand(); }
+  schedule(150);
+}
+
+// ------------------------------------------------------------------ batch command
+function updateCommand() {
+  const parts = ["boottool run", '"<input folder>"', '"<output folder>"'];
+  const num = v => String(Number(Number(v).toFixed(3)));
+  for (const k in FLAG) if (S.params[k] !== S.defaults[k]) parts.push(FLAG[k], typeof S.params[k] === "number" ? num(S.params[k]) : S.params[k]);
+  for (const k in BOOLFLAG) if (S.params[k] !== S.defaults[k]) parts.push((S.params[k] ? "--" : "--no-") + BOOLFLAG[k]);
+  $("cmd").value = parts.join(" ");
+}
+$("copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("cmd").value); toast("Command copied."); }
+  catch { $("cmd").select(); toast("Press Cmd+C to copy."); }
+});
+
+// ------------------------------------------------------------------ upload
+async function loadFile(file) {
+  if (!file) return;
+  try {
+    const r = await fetch("/upload", { method: "POST", body: file });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    S.id = j.id; S.w = j.width; S.h = j.height; S.name = file.name.replace(/\.[^.]+$/, "") || "image";
+    $("orig").src = "/original/" + j.id;
+    await $("orig").decode().catch(() => {});
+    $("drop").hidden = true; $("stage").hidden = false; $("save").disabled = false;
+    layout(); fit();
+    schedule(0);
+  } catch (e) { toast("Could not load that image: " + e.message); }
+}
+$("pick").addEventListener("click", () => $("file").click());
+$("open").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", e => { loadFile(e.target.files[0]); e.target.value = ""; });
+const vp = $("viewport");
+["dragenter", "dragover"].forEach(ev => vp.addEventListener(ev, e => { e.preventDefault(); vp.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => vp.addEventListener(ev, e => { e.preventDefault(); vp.classList.remove("over"); }));
+vp.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+window.addEventListener("paste", e => { const f = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith("image/")); if (f) loadFile(f); });
+
+// ------------------------------------------------------------------ tracing
+let reqN = 0, ctl = null, timer = null;
+function setBusy(on, text) { const b = $("busy"); b.classList.toggle("on", on); b.textContent = on ? (text || "Tracing") : ""; }
+function schedule(delay) { if (!S.id) return; clearTimeout(timer); setBusy(true); timer = setTimeout(runTrace, delay); }
+async function runTrace() {
+  const n = ++reqN; if (ctl) ctl.abort(); ctl = new AbortController();
+  try {
+    const r = await fetch("/trace", { method: "POST", signal: ctl.signal, body: JSON.stringify({ id: S.id, params: S.params }) });
+    const j = await r.json();
+    if (n !== reqN || j.superseded) return;
+    if (j.error) { setBusy(false); toast(j.error); return; }
+    applyResult(j); setBusy(false);
+  } catch (e) { if (e.name !== "AbortError") { setBusy(false); toast("Trace failed: " + e.message); } }
+}
+function applyResult(j) {
+  S.result = j;
+  const url = URL.createObjectURL(new Blob([j.svg], { type: "image/svg+xml" }));
+  const old = S.svgUrl; S.svgUrl = url; $("vec").src = url;
+  if (old) setTimeout(() => URL.revokeObjectURL(old), 3000);
+  const st = j.stats, kb = (st.bytes / 1024).toFixed(st.bytes > 102400 ? 0 : 1);
+  $("status").innerHTML =
+    `<span class="chip">Detected <b>${j.mode === "lineart" ? "line art" : "colour"}</b></span>` +
+    `<span class="chip">Working size <b>${j.size[0]}×${j.size[1]}</b>${j.capped ? " (preview capped)" : ""}</span>` +
+    `<span class="chip"><b>${st.node_count.toLocaleString()}</b> nodes</span>` +
+    `<span class="chip"><b>${st.path_count}</b> path${st.path_count === 1 ? "" : "s"}</span>` +
+    `<span class="chip"><b>${kb} KB</b></span><span class="chip">${j.ms} ms</span>`;
+}
+
+// ------------------------------------------------------------------ export
+$("save").addEventListener("click", async () => {
+  if (!S.id) return;
+  const btn = $("save"); btn.disabled = true; btn.textContent = "Rendering full quality…";
+  try {
+    const r = await fetch("/trace", { method: "POST", body: JSON.stringify({ id: S.id, params: S.params, export: true }) });
+    const j = await r.json();
+    if (!r.ok || j.error) throw new Error(j.error || r.statusText);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([j.svg], { type: "image/svg+xml" }));
+    a.download = S.name + ".svg"; document.body.appendChild(a); a.click(); a.remove();
+    toast(`Saved ${S.name}.svg (SSIM ${j.scores.ssim_target}).`);
+  } catch (e) { toast("Save failed: " + e.message); }
+  finally { btn.disabled = false; btn.textContent = "Save SVG"; }
+});
+
+// ------------------------------------------------------------------ view, zoom, pan
+const stage = $("stage"), GAP = 24;
+function contentSize() { return S.view === "split" ? [S.w * 2 + GAP, S.h] : [S.w, S.h]; }
+function layout() {
+  const A = $("paneA"), B = $("paneB"), v = S.view;
+  for (const p of [A, B]) { p.style.width = S.w + "px"; p.style.height = S.h + "px"; }
+  A.style.left = "0px"; B.style.left = v === "split" ? (S.w + GAP) + "px" : "0px";
+  A.hidden = v === "vector"; B.hidden = v === "original";
+  B.classList.toggle("paper", v !== "overlay");
+  $("orig").style.opacity = v === "overlay" ? S.opac : 1;
+  $("opacWrap").style.visibility = v === "overlay" ? "visible" : "hidden";
+  document.querySelectorAll("[data-view]").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.view === v)));
+  const [cw, ch] = contentSize(); stage.style.width = cw + "px"; stage.style.height = ch + "px";
+  paint();
+}
+function paint() {
+  stage.style.transform = `translate(${S.tx}px, ${S.ty}px) scale(${S.k})`;
+  $("orig").style.imageRendering = S.k > 2 ? "pixelated" : "auto";
+  $("zlabel").textContent = Math.round(S.k * 100) + "%";
+}
+function fit() {
+  if (!S.w) return;
+  const r = vp.getBoundingClientRect(), [cw, ch] = contentSize();
+  S.k = Math.min(r.width / cw, r.height / ch) * 0.94;
+  S.tx = (r.width - cw * S.k) / 2; S.ty = (r.height - ch * S.k) / 2; paint();
+}
+function zoomAt(f, cx, cy) {
+  const nk = Math.min(Math.max(S.k * f, 0.02), 40), real = nk / S.k;
+  S.tx = cx - (cx - S.tx) * real; S.ty = cy - (cy - S.ty) * real; S.k = nk; paint();
+}
+function zoomCentre(f) { const r = vp.getBoundingClientRect(); zoomAt(f, r.width / 2, r.height / 2); }
+function setView(v) { S.view = v; layout(); fit(); }
+document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", () => setView(b.dataset.view)));
+$("opac").addEventListener("input", e => { S.opac = e.target.value / 100; layout(); });
+$("zfit").addEventListener("click", fit);
+$("zin").addEventListener("click", () => zoomCentre(1.25));
+$("zout").addEventListener("click", () => zoomCentre(0.8));
+$("z100").addEventListener("click", () => { const r = vp.getBoundingClientRect(), [cw, ch] = contentSize(); S.k = 1; S.tx = (r.width - cw) / 2; S.ty = (r.height - ch) / 2; paint(); });
+vp.addEventListener("wheel", e => {
+  if (!S.w) return; e.preventDefault();
+  const r = vp.getBoundingClientRect(); zoomAt(Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0018)), e.clientX - r.left, e.clientY - r.top);
+}, { passive: false });
+let drag = null;
+vp.addEventListener("pointerdown", e => { if (!S.w || e.button !== 0) return; drag = { x: e.clientX, y: e.clientY, tx: S.tx, ty: S.ty }; vp.setPointerCapture(e.pointerId); vp.classList.add("drag"); });
+vp.addEventListener("pointermove", e => { if (!drag) return; S.tx = drag.tx + e.clientX - drag.x; S.ty = drag.ty + e.clientY - drag.y; paint(); });
+const endDrag = () => { drag = null; vp.classList.remove("drag"); };
+vp.addEventListener("pointerup", endDrag); vp.addEventListener("pointercancel", endDrag);
+vp.addEventListener("dblclick", fit);
+window.addEventListener("resize", fit);
+window.addEventListener("keydown", e => {
+  if (e.metaKey || e.ctrlKey || e.altKey || !S.w) return;
+  const v = { 1: "vector", 2: "overlay", 3: "split", 4: "original" }[e.key];
+  if (v) setView(v); else if (e.key === "f" || e.key === "F") fit();
+});
+
+// ------------------------------------------------------------------ boot
+(async function boot() {
+  try {
+    S.defaults = await (await fetch("/defaults")).json();
+    S.params = Object.assign({}, S.defaults);
+  } catch { toast("Could not reach the boottool server."); }
+  buildControls(); buildPresets(); syncWidgets(); layout();
+})();
+</script>
+</body>
+</html>

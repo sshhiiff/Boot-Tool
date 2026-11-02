@@ -1,0 +1,42 @@
+BOOT TOOL: how to start
+
+1. Install Python (once), version 3.10 or newer: https://www.python.org/downloads/
+   Windows: on the installer's first screen, tick "Add python.exe to PATH".
+
+2. Unzip this folder (for example into Downloads).
+
+3. Open Terminal (Mac) or Command Prompt (Windows) and go into the folder.
+
+   FIRST TIME ONLY (needs internet, takes a few minutes):
+
+   Mac:
+     cd ~/Downloads/boottool
+     python3 -m venv .venv
+     source .venv/bin/activate
+     pip install -e .
+     boottool ui
+
+   Windows:
+     cd %USERPROFILE%\Downloads\boottool
+     py -3 -m venv .venv
+     .venv\Scripts\activate
+     pip install -e .
+     boottool ui
+
+   EVERY TIME AFTER THAT:
+
+   Mac:
+     cd ~/Downloads/boottool
+     source .venv/bin/activate
+     boottool ui
+
+   Windows:
+     cd %USERPROFILE%\Downloads\boottool
+     .venv\Scripts\activate
+     boottool ui
+
+4. Boot Tool opens in your web browser (http://127.0.0.1:8765). Keep the Terminal window open while you work.
+   Press Control+C in it to stop.
+
+Your saved graphics are kept in a BootTool folder in your home folder, so updating never touches them.
+To update: unzip the new version into a new folder and do the first-time steps again there.

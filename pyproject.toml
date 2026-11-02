@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "boottool"
+version = "0.8.3"
+description = "Boot Tool: raster to SVG, halftones and screen-print colour separations."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pillow",
+    "opencv-python-headless",
+    "scikit-image",
+    "scipy",
+    "lxml",
+    "click",
+    "fonttools",
+]
+
+[project.optional-dependencies]
+vtracer = ["vtracer"]
+raster = ["cairosvg"]
+dev = ["pytest"]
+
+[project.scripts]
+boottool = "boottool.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["boottool*"]
+
+[tool.setuptools.package-data]
+boottool = ["static/*.html", "static/*.js", "static/vendor/*.js", "web/*.html"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
