@@ -19,9 +19,14 @@ Not sure which Mac you have? Apple menu → About This Mac. "Chip: Apple…" mea
 
 ## Mac
 1. Unzip the file (double-click it).
-2. Open the `BootTool` folder. **Right-click `BootTool` → Open → Open** (the first time only; the app is not code-signed, so a plain double-click is refused).
-3. A Terminal window opens and your browser opens Boot Tool. Keep the Terminal window open while you work; close it to quit.
-4. If macOS still blocks it: System Settings → Privacy & Security → scroll down → **Open Anyway**.
+2. **Important, first time only:** macOS blocks downloaded apps that are not signed with a paid Apple account, and may say "Python.framework is damaged". It is not damaged; this one line fixes it.
+   - Open **Terminal** (Cmd+Space, type Terminal, press Enter).
+   - Type `xattr -cr ` (with a space after it), then **drag the `BootTool` folder from Finder into the Terminal window** and press Enter. Nothing is printed when it works.
+3. Open the `BootTool` folder. **Right-click `BootTool` → Open → Open**.
+4. A Terminal window opens and your browser opens Boot Tool. Keep the Terminal window open while you work; close it to quit.
+5. If macOS still blocks it: System Settings → Privacy & Security → scroll down → **Open Anyway**.
+
+If a window asks to install "command line developer tools", click **Cancel**: you opened the wrong file. Download `BootTool-Mac-AppleSilicon.zip` or `BootTool-Mac-Intel.zip` (not "Source code") from the Releases page.
 
 Your converted graphics are saved in a `BootTool` folder inside your home folder (Library, Prints and Fonts). Everything runs on your own computer; nothing is uploaded.
 
