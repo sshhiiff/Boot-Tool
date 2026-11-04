@@ -105,7 +105,7 @@ def _fixed_labels(path, colors, want_paper: bool, p: Params):
 def build(path, p: SepParams, page: PageOpts) -> Job:
     k = p.inks + (1 if p.paper else 0)
     tp = Params(mode="color", colors=k, min_side=1500, max_side=3000, speckle=p.speckle,
-                smooth_sigma=p.smooth, epsilon=0.75)
+                smooth_sigma=max(p.smooth, 2.2), epsilon=0.7)
     fixed = [c for c in p.colors if c] if p.fixed else []
     if fixed:
         lab, pal, paper = _fixed_labels(path, fixed, p.paper, tp)
