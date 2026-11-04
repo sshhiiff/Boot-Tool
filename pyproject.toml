@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boottool"
-version = "0.8.5"
+version = "0.8.8"
 description = "Boot Tool: raster to SVG, halftones and screen-print colour separations."
 requires-python = ">=3.10"
 dependencies = [
