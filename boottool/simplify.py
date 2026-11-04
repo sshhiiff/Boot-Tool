@@ -40,7 +40,7 @@ def _merge_map(fills: list[str], tol: int) -> dict[str, str]:
 
 
 def postprocess(svg_text: str, p: Params, display: tuple[int, int] | None = None) -> str:
-    parser = etree.XMLParser(remove_comments=True, remove_blank_text=True)
+    parser = etree.XMLParser(remove_comments=True, remove_blank_text=True, huge_tree=True)
     root = etree.fromstring(svg_text.encode("utf-8"), parser)
     if display:                      # keep the viewBox, change only the declared size
         root.set("width", str(display[0]))
@@ -59,7 +59,7 @@ def postprocess(svg_text: str, p: Params, display: tuple[int, int] | None = None
 
 
 def svg_stats(svg_text: str) -> dict:
-    root = etree.fromstring(svg_text.encode("utf-8"))
+    root = etree.fromstring(svg_text.encode("utf-8"), etree.XMLParser(huge_tree=True))
     paths = [el for el in root.iter() if isinstance(el.tag, str) and el.tag.split("}")[-1] == "path"]
     nodes = sum(len(_CMD.findall(el.get("d", ""))) for el in paths)
     fills = {el.get("fill") for el in root.iter() if isinstance(el.tag, str) and el.get("fill")}

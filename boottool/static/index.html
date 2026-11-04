@@ -605,7 +605,7 @@ function viewItem(i) {
   const it = BATCH.items[i]; if (!it) return;
   BATCH.sel = i; bindConvert(); imageId = it.id; natW = it.w; natH = it.h; fileName = it.name.replace(/\.[^.]+$/, ""); lastRes = null; stageKey = "";
   ownUrl = false; origURL = it.url; $("#orig").src = it.url;
-  $("#name").textContent = `${it.name} · ${it.w}×${it.h}`; $("#empty").style.display = "none"; $("#stage").style.display = "block";
+  setName(fileName, `· ${it.w}×${it.h}`); $("#empty").style.display = "none"; $("#stage").style.display = "block";
   setMode("svg"); renderSide(); run();
 }
 const batchRunning = () => BATCH.job && BATCH.status && !BATCH.status.finished;

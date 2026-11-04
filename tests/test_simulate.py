@@ -175,3 +175,22 @@ def test_simulate_in_the_browser(server, lineart, tmp_path):
         assert any(abs(i["width_mm"] - 350) < 0.5 for i in items)
         assert not errors, errors
         b.close()
+
+
+def test_opening_an_image_after_viewing_a_batch_item(server, lineart):
+    """Viewing an item from the batch list used to wipe the file-name box, so the next image failed with 'Cannot set properties of null'."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        pg_ = b.new_page(viewport={"width": 1400, "height": 850})
+        errors = []
+        pg_.on("pageerror", lambda e: errors.append(str(e)))
+        pg_.goto(server)
+        pg_.set_input_files("#file", str(lineart))
+        pg_.wait_for_function("imageId && lastShown")
+        pg_.evaluate("BATCH.items = [{id: imageId, name: 'a.png', w: 600, h: 400, url: '', own: null}]; viewItem(0)")
+        assert pg_.locator("#nmEdit").count() == 1
+        pg_.set_input_files("#file", str(lineart))
+        pg_.wait_for_function("document.querySelector('#nmEdit').textContent.length > 0")
+        assert not errors, errors
+        b.close()
