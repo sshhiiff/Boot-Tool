@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "boottool"
-version = "0.8.8"
+dynamic = ["version"]                   # from boottool/__init__.py
 description = "Boot Tool: raster to SVG, halftones and screen-print colour separations."
 requires-python = ">=3.10"
 dependencies = [
@@ -25,6 +25,9 @@ dev = ["pytest"]
 
 [project.scripts]
 boottool = "boottool.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "boottool.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["boottool*"]

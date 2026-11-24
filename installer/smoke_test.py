@@ -1,6 +1,7 @@
-"""Start the built app and use it once, the way a person would: open the page, open a picture,
-convert it, make print plates and turn text into outlines, then quit. Fails loudly if anything that
-works from source is missing from the app (a file or library PyInstaller did not pick up).
+"""Start the built app and use it once, the way a person would: open the page, check its version
+number, open a picture, convert it, make print plates and turn text into outlines, then quit. Fails
+loudly if anything that works from source is missing from the app (a file or library PyInstaller did
+not pick up).
 
     python installer/smoke_test.py dist/BootTool/BootTool
 """
@@ -36,6 +37,15 @@ def _picture() -> bytes:
     return buf.getvalue()
 
 
+def _source_version() -> str:
+    """The version this build should show: the one in boottool/__init__.py (set from the release tag)."""
+    init = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "boottool", "__init__.py")
+    with open(init, encoding="utf-8") as f:
+        m = re.search(r'^__version__ = "([^"]+)"', f.read(), re.M)
+    assert m, f'no line like __version__ = "0.9.1" in {init}'
+    return m.group(1)
+
+
 def main(exe: str) -> None:
     if os.name == "nt" and not exe.lower().endswith(".exe"):
         exe += ".exe"
@@ -64,6 +74,14 @@ def main(exe: str) -> None:
         for f in ("compose.js", "simulate.js", "vendor/paper-core.js"):
             assert _request(url + "static/" + f)[0] == 200, f"{f} is missing from the app"
         print("page and scripts load")
+
+        shown = json.loads(_request(url + "api/defaults")[1])["version"]
+        assert shown == _source_version(), f"the app says version {shown}, but this build is {_source_version()}"
+        if os.environ.get("GITHUB_REF_TYPE") == "tag" and os.environ.get("GITHUB_REF_NAME", "").startswith(("v", "V")):
+            # a release build, numbered from its tag by set_version.sh: must match the tag
+            tag = os.environ["GITHUB_REF_NAME"]
+            assert "v" + shown == tag, f"the app says version {shown}, but the release is {tag}"
+        print("version", shown)
 
         image = json.loads(_request(url + "api/upload", _picture(), "application/octet-stream")[1])
         res = json.loads(_request(url + "api/trace", json.dumps(

@@ -38,7 +38,30 @@ Works on 64-bit Intel/AMD Linux from about 2022 on (Ubuntu 22.04, Debian 12, Fed
 Your converted graphics are saved in a `BootTool` folder inside your home folder (Library, Prints and Fonts). Everything runs on your own computer; nothing is uploaded.
 
 ## Making a new release (for the maintainer)
-1. Change the version in `pyproject.toml` and `boottool/__init__.py`.
-2. Commit, then `git tag v0.8.3` and `git push origin v0.8.3` (use your version number).
-3. Wait about 15 minutes. The four downloads appear on the new Release. Each app is started once and used
+1. On GitHub, open **Releases** → **Draft a new release**.
+2. Under **Choose a tag**, type the new version, such as `v0.9.1`, and pick **Create new tag on publish**.
+   It must be a small `v` and then two to four numbers with dots between them: `v0.9.1`, `v1.0` or `v1.0.10`.
+   A number can be `0`, but can't start with `0` otherwise. Not `0.9.1` (no `v`), `v1` (one number),
+   `v0.09.1` (`09`) or `v0.9.1-beta`.
+   The downloads take their version number from this tag, so nothing needs changing in the code first.
+   For a test version, still use a plain number and tick **Set as a pre-release**.
+3. Click **Generate release notes**, then **Publish release**.
+4. The release page appears straight away; the downloads follow when they are built and checked.
+   Wait about 15 minutes. The four downloads appear on the new Release. Each app is started once and used
    (open a picture, convert it, make plates) before it is published, so a broken download is never released.
+
+If no downloads have appeared after about 30 minutes, open the **Actions** tab.
+- **No Build downloads run for your release at all:** check the tag. Does it start with a small `v` and follow
+  the rule above? Did you pick **Create new tag on publish** (only a new tag starts the build)? If you picked
+  an existing tag from an earlier release, delete only this new release (never that tag) and make it again
+  with a new tag. If the new tag is wrong, fix it as in the last point below. If the tag looks right, ask for
+  help before deleting anything.
+- **Still running (yellow):** GitHub is busy; wait a bit longer.
+- **Cancelled:** GitHub sometimes runs out of Mac machines. Open the run and click **Re-run failed jobs**.
+- **Failed (red ❌):** open it and read the message. If it says the tag is not a version number, fix it as
+  below. For anything else, click **Re-run failed jobs** once; if it fails again, ask for help before deleting
+  anything.
+- **To fix a wrong tag you just made (only then):** delete the release, then delete that tag too (deleting a
+  release leaves its tag behind): on the **Releases** page open **Tags** and use the delete (trash) button next to
+  it. Never delete the tag of an earlier release. Then make the release again with the right tag. Until it's
+  fixed, the empty release is visible to everyone.
