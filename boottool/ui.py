@@ -286,7 +286,7 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
                 except (ValueError, KeyError) as e:
                     return self._json(404, {"error": str(e).strip("'")})
             if url.path == "/api/fonts":
-                return self._json(200, {"fonts": fonts_mod.listing(refresh="refresh" in q), "folder": str(fonts_mod.user_folder())})
+                return self._json(200, {**fonts_mod.catalog(refresh="refresh" in q), "folder": str(fonts_mod.user_folder())})
             if url.path.startswith("/static/"):
                 f = STATIC / url.path[len("/static/"):]
                 ok = {"compose.js", "simulate.js", "vendor/paper-core.js"}
@@ -341,9 +341,10 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
                     return self._json(200, {"ok": True})
                 if self.path == "/api/text":
                     req = json.loads(body)
-                    return self._json(200, fonts_mod.outline(int(req.get("font", 0)), req.get("text", ""), float(req.get("size", 10)),
+                    return self._json(200, fonts_mod.outline(str(req.get("font", "")), req.get("text", ""), float(req.get("size", 10)),
                                                              float(req.get("spacing", 0)), str(req.get("align", "left")),
-                                                             float(req.get("line", 1.2))))
+                                                             float(req.get("line", 1.2)),
+                                                             req.get("face") and str(req["face"])))
                 if self.path == "/api/batch/start":
                     job = bt.start(engine, json.loads(body), coerce_params)
                     return self._json(200, {"job": job.id, "out_dir": str(job.out_dir) if job.out_dir else None})

@@ -82,7 +82,7 @@ def test_static_files_are_limited_to_the_known_scripts(server):
     assert _get(server + "/static/../ui.py")[0] == 404 and _get(server + "/static/index.html")[0] == 404
 
 
-def _make_font(path, family="Test Sans", advance=600):
+def _make_font(path, family="Test Sans", advance=600, space=300, notdef=500):
     from fontTools.fontBuilder import FontBuilder
     from fontTools.pens.ttGlyphPen import TTGlyphPen
     fb = FontBuilder(1000, isTTF=True)
@@ -92,7 +92,7 @@ def _make_font(path, family="Test Sans", advance=600):
     pen.moveTo((100, 0)); pen.lineTo((100, 700)); pen.lineTo((500, 700)); pen.lineTo((500, 0)); pen.closePath()
     glyphs = {".notdef": TTGlyphPen(None).glyph(), "A": pen.glyph(), "space": TTGlyphPen(None).glyph()}
     fb.setupGlyf(glyphs)
-    fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (advance, 100), "space": (300, 0)})
+    fb.setupHorizontalMetrics({".notdef": (notdef, 0), "A": (advance, 100), "space": (space, 0)})
     fb.setupHorizontalHeader(ascent=800, descent=-200)
     fb.setupNameTable({"familyName": family, "styleName": "Regular"})
     fb.setupOS2(sTypoAscender=800, sTypoDescender=-200)
@@ -157,6 +157,297 @@ def test_edited_text_keeps_its_own_font(server):
         page.wait_for_timeout(1200)
         wider = page.evaluate("[Compose._api.getL().art.lastChild.bounds.width, Compose._api.getL().art.lastChild.data.text.font]")
         assert wider[0] > w["own"] * 1.5 and wider[1] == w["wide"], wider
+        assert not errs, errs
+        b.close()
+
+
+def test_a_font_keeps_its_id_when_other_fonts_come_and_go(server):
+    """Font ids used to be positions in the list, so a new font that sorts earlier moved every id on."""
+    _make_font(fonts.user_folder() / "TestSans.ttf")
+    _make_font(fonts.user_folder() / "TestWide.ttf", family="Test Wide", advance=1200)
+    before = {f["family"]: f["id"] for f in fonts.listing(refresh=True)}
+    wide = fonts.outline(before["Test Wide"], "AA", 10)
+    _make_font(fonts.user_folder() / "First.ttf", family="A First Font", advance=300)   # sorts before both
+    after = {f["family"]: f["id"] for f in fonts.listing(refresh=True)}
+    assert len(after) == 3 and len(set(after.values())) == 3
+    assert {k: after[k] for k in before} == before
+    assert fonts.outline(before["Test Wide"], "AA", 10) == wide          # the same id is still the same font
+    fonts._FONTS = None                                                  # as after a restart of Boot Tool
+    assert {f["family"]: f["id"] for f in fonts.listing()} == after
+    code, j = _post(server + "/api/text", {"font": before["Test Wide"], "text": "AA", "size": 10})
+    assert code == 200 and j == wide
+    (fonts.user_folder() / "TestWide.ttf").unlink()                      # a font that is taken away
+    fonts.listing(refresh=True)
+    code, j = _post(server + "/api/text", {"font": before["Test Wide"], "text": "AA", "size": 10})
+    assert code == 400 and "not installed" in j["error"]                 # says so, and never draws another font instead
+    assert fonts.outline(before["Test Sans"], "AA", 10)["w"] < wide["w"]
+
+
+def test_two_fonts_with_one_name_are_never_swapped_for_each_other():
+    """Two versions of a font have the same name. If the one in use is taken away, text set in it must
+    not quietly be drawn in the other; and a font file that is replaced is read again."""
+    import shutil
+    d = fonts.user_folder()
+    (d / "a").mkdir()
+    (d / "b").mkdir()
+    _make_font(d / "a" / "Sans.ttf")                                     # the one listed (first by folder name)
+    _make_font(d / "b" / "Sans.ttf", advance=1200)                       # another version: same name, wider letters
+    one = [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"]
+    assert len(one) == 1
+    narrow = fonts.outline(one[0]["id"], "AA", 10)
+    shutil.copy(d / "a" / "Sans.ttf", d / "c.ttf")                       # (a copy of the same file is the same font)
+    (d / "a" / "Sans.ttf").unlink()
+    (d / "c.ttf").replace(d / "a" / "Copy.ttf")
+    assert [f["id"] for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"] == [one[0]["id"]]
+    assert fonts.outline(one[0]["id"], "AA", 10) == narrow
+    (d / "a" / "Copy.ttf").unlink()                                      # now only the other version is left
+    other = [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"]
+    assert len(other) == 1 and other[0]["id"] != one[0]["id"]
+    with pytest.raises(KeyError, match="not installed"):
+        fonts.outline(one[0]["id"], "AA", 10)                            # used to come back in the wider version
+    assert fonts.outline(other[0]["id"], "AA", 10)["w"] > narrow["w"] * 1.5
+
+    fonts.listing(refresh=True)
+    _make_font(d / "b" / "Sans.ttf", family="Test Other", advance=300)   # the file is replaced by another font
+    with pytest.raises(KeyError, match="not installed"):
+        fonts.outline(other[0]["id"], "AA", 10)                          # (before the next refresh: not the new file under the old id)
+    new = next(f for f in fonts.listing(refresh=True) if f["family"] == "Test Other")
+    assert fonts.outline(new["id"], "AA", 10)["w"] < narrow["w"]         # used to be drawn from the old file
+
+
+def _make_collection(path, advance, scratch):
+    """A font collection (.ttc) holding one Test Sans. Like many collections it carries no checksum of
+    the whole font, and these are given the same dates, so only what is in them tells two apart."""
+    from fontTools.ttLib import TTCollection, TTFont
+    _make_font(scratch / "one.ttf", advance=advance)
+    f = TTFont(scratch / "one.ttf", recalcTimestamp=False)
+    f["head"].created = f["head"].modified = 0
+    c = TTCollection()
+    c.fonts = [f]
+    c.save(str(path))
+    c = TTCollection(str(path), lazy=True)
+    at = c.fonts[0].reader.tables["head"].offset + 8                     # head.checkSumAdjustment
+    c.close()
+    data = bytearray(path.read_bytes())
+    data[at:at + 4] = bytes(4)
+    path.write_bytes(bytes(data))
+
+
+def test_another_version_of_a_font_in_use_changes_nothing_for_its_text(tmp_path):
+    """Text is set in a font. Another version of that font (same name) is installed, in a file that
+    comes first. The text's own font is still there, so it must neither be drawn in the new version
+    nor be called missing."""
+    d = fonts.user_folder()
+    _make_collection(d / "Normal.ttc", 600, tmp_path)
+    mine = [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"]
+    assert len(mine) == 1 and fonts.others() == []
+    narrow = fonts.outline(mine[0]["id"], "AA", 10)
+    _make_collection(d / "ATest.ttc", 1200, tmp_path)                    # the other version: wider letters, nothing else
+    listed = [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"]
+    assert len(listed) == 1 and listed[0]["id"] != mine[0]["id"]         # one entry in the list, the new version
+    assert fonts.others() == mine                                        # and the one in use is still known
+    assert fonts.outline(mine[0]["id"], "AA", 10) == narrow              # and still drawn as before
+    assert fonts.outline(listed[0]["id"], "AA", 10)["w"] > narrow["w"] * 1.5
+
+
+def test_text_is_only_ever_redrawn_from_the_very_font_it_was_drawn_from(server, monkeypatch):
+    """Two different fonts can look the same to the list: the same name, and tables with the same
+    checksums and lengths (here the widths of the space and of one other glyph are swapped). Text
+    keeps the one it was drawn from, by its exact contents."""
+    from fontTools.ttLib import TTFont
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1700000000")               # both made "at the same moment"
+    d = fonts.user_folder()
+    (d / "n").mkdir()
+    (d / "a").mkdir()
+    _make_font(d / "n" / "Mine.ttf", space=300, notdef=500)
+    mine = [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"]
+    drawn = fonts.outline(mine[0]["id"], "A A", 10)
+    assert abs(drawn["w"] - 15.0) < 0.01 and len(drawn["face"]) == 40
+    _make_font(d / "a" / "Other.ttf", space=500, notdef=300)             # comes first in the folder
+    assert fonts._face(TTFont(d / "a" / "Other.ttf")) == fonts._face(TTFont(d / "n" / "Mine.ttf"))   # (they do look the same)
+    assert fonts.catalog(refresh=True) == {"fonts": mine, "others": []}
+    assert fonts.outline(mine[0]["id"], "A A", 10, face=drawn["face"]) == drawn   # used to come back 17 mm wide, from the other one
+    code, j = _post(server + "/api/text", {"font": mine[0]["id"], "face": drawn["face"], "text": "A A", "size": 10})
+    assert code == 200 and j == drawn
+    assert abs(fonts.outline(mine[0]["id"], "A A", 10)["w"] - 17.0) < 0.01   # (new text gets the one that comes first)
+    (d / "n" / "Mine.ttf").unlink()                                      # its own font is taken away
+    fonts.listing(refresh=True)
+    code, j = _post(server + "/api/text", {"font": mine[0]["id"], "face": drawn["face"], "text": "A A", "size": 10})
+    assert code == 400 and "not installed" in j["error"]
+
+
+def test_a_font_packed_another_way_is_still_the_same_font(tmp_path):
+    """The same font, once as a .ttf and once inside a collection (.ttc): text set in one is drawn
+    from the other without a word."""
+    from fontTools.ttLib import TTCollection, TTFont
+    d = fonts.user_folder()
+    _make_font(d / "Sans.ttf")
+    mine = [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"]
+    drawn = fonts.outline(mine[0]["id"], "AA", 10)
+    c = TTCollection()
+    c.fonts = [TTFont(d / "Sans.ttf", recalcTimestamp=False, recalcBBoxes=False)]
+    c.save(str(tmp_path / "Sans.ttc"))
+    (d / "Sans.ttf").unlink()
+    (tmp_path / "Sans.ttc").replace(d / "Sans.ttc")
+    assert [f for f in fonts.listing(refresh=True) if f["family"] == "Test Sans"] == mine
+    assert fonts.outline(mine[0]["id"], "AA", 10, face=drawn["face"]) == drawn   # used to be "not installed any more"
+
+
+def _text_width(page):
+    return page.evaluate("Compose._api.getL().art.lastChild.bounds.width")
+
+
+def _wait_for_width(page, want):
+    page.wait_for_function("w => Math.abs(Compose._api.getL().art.lastChild.bounds.width - w) < 0.05", arg=want, timeout=20000)
+
+
+def test_refresh_fonts_leaves_existing_text_in_its_font(server):
+    """Text is on the page, a new font is installed, and "Refresh fonts" is pressed. Editing the text
+    afterwards used to redraw it in whichever font had taken its place in the list."""
+    _make_font(fonts.user_folder() / "TestSans.ttf")
+    _make_font(fonts.user_folder() / "TestWide.ttf", family="Test Wide", advance=1200)
+    fonts.listing(refresh=True)
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.click('a[data-t="compose"]')
+        page.wait_for_function("typeof Compose !== 'undefined' && Compose._S.ready")
+        own, em = page.evaluate("""async () => {
+          const A = Compose._api, S = Compose._S, L = A.getL();
+          const j = await (await fetch('/api/fonts')).json(); S.fonts = j.fonts;
+          S.font = S.fonts.find(f => f.family === 'Test Wide'); S.text.text = 'AAAA';
+          await A.addText(new paper.Point(20, 20));
+          A.select([L.art.lastChild]);
+          return [L.art.lastChild.bounds.width, S.text.size * 25.4 / 72];
+        }""")
+        assert abs(own - 4.0 * em) < 0.05                                 # three steps of 1.2 em and a letter 0.4 em wide
+        shown = "(() => { const s = document.querySelector('#side select'); return s.options[s.selectedIndex].textContent; })()"
+        assert page.evaluate(shown).startswith("Test Wide")
+        _make_font(fonts.user_folder() / "First.ttf", family="A First Font", advance=300)   # sorts before both
+        page.click("#side .bsm:text('Refresh fonts')")
+        page.wait_for_function("Compose._S.fonts.length === 3")
+        assert page.evaluate(shown).startswith("Test Wide")              # the panel still names the text's own font
+        assert page.evaluate("Compose._S.font.family") == "Test Wide"    # and new text still gets the font that was picked
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {spacing: 100})")   # the text is edited
+        _wait_for_width(page, own + 0.3 * em)                            # redrawn in Test Wide (in Test Sans: 2.5 em)
+
+        # Another version of the text's font is installed, in a file that comes first: the list shows
+        # that one, and the text keeps its own.
+        _make_font(fonts.user_folder() / "A-Wide.ttf", family="Test Wide", advance=900)
+        page.click("#side .bsm:text('Refresh fonts')")
+        page.wait_for_function("Compose._S.fontsOther.length === 1")
+        assert page.evaluate("Compose._S.fonts.length") == 3
+        assert page.evaluate(shown) == "Test Wide — Regular (another version)"
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {spacing: 200})")
+        _wait_for_width(page, own + 0.6 * em)                            # still in its own version (the listed one: 3.7 em)
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {spacing: 100})")
+        _wait_for_width(page, own + 0.3 * em)
+
+        page.fill("#side textarea", "")                                  # the box is emptied on the way to typing something else
+        page.wait_for_timeout(800)
+        assert page.evaluate("document.activeElement.tagName") == "TEXTAREA"   # it stays as it is, with the cursor in it,
+        assert page.evaluate("document.querySelector('#toast').style.display") != "block"   # and nothing complains
+        assert page.evaluate("Compose._api.getL().art.lastChild.data.text.text") == "AAAA"
+        page.evaluate("document.activeElement.blur()")
+        assert page.input_value("#side textarea") == "AAAA"              # left empty, it shows the text again
+
+        (fonts.user_folder() / "TestWide.ttf").unlink()                  # its font is taken away
+        page.click("#side .bsm:text('Refresh fonts')")
+        page.wait_for_function("Compose._S.fontsOther.length === 0")
+        assert page.evaluate(shown) == "Test Wide Regular — not installed"   # it says so, rather than naming another font
+        assert page.evaluate("document.querySelector('#side select').options[0].disabled")   # (and that can't be picked)
+        page.evaluate("""() => { const A = Compose._api, t = A.getL().art.lastChild;
+          A.retext(t, {text: 'AA', spacing: 0}); A.rotateSel(90); }""")   # an edit, and before it is refused the text is turned
+        page.wait_for_function("document.querySelector('#toast') && /not installed/.test(document.querySelector('#toast').textContent)", timeout=10000)
+        assert page.evaluate("(({text, spacing, rot}) => [text, spacing, rot])(Compose._api.getL().art.lastChild.data.text)") == ["AAAA", 100, 90]   # as it was, and still turned
+        tall = page.evaluate("Compose._api.getL().art.lastChild.bounds.height")
+        assert abs(tall - (own + 0.3 * em)) < 0.05                       # the drawing is left as it is (on its side)
+        assert page.input_value("#side textarea") == "AAAA"
+        page.evaluate("Compose._api.rotateSel(-90)")
+        page.evaluate("""() => { const A = Compose._api, t = A.getL().art.lastChild, b = t.bounds;
+          A.retext(t, {size: 72}); A.setBounds(b.x, b.y, b.width * 2, b.height * 2); }""")   # likewise a new size, and the text is made twice as large by hand
+        page.wait_for_function("Compose._api.getL().art.lastChild.data.text.size === 72", timeout=10000)   # refused: 36 pt, made twice as large
+        _wait_for_width(page, 2 * (own + 0.3 * em))
+        sans = page.evaluate("Compose._S.fonts.find(f => f.family === 'Test Sans').id")
+        page.select_option("#side select", sans)                         # until another font is picked for it
+        _wait_for_width(page, 2 * 2.5 * em)                              # three steps of 0.7 em and a letter, twice as large
+        assert page.evaluate("Compose._S.font.family") == "Test Sans"
+        gone = page.evaluate("""(() => { const s = document.querySelector('#side select'); s.value = s.options[0].value;
+          s.dispatchEvent(new Event('change')); return [s.options[0].disabled, Compose._S.font && Compose._S.font.family]; })()""")
+        assert gone == [True, "Test Sans"]                               # the font that is gone can't be made the one for new text
+
+        # The font picked for new text is taken away too: new text falls back to a font that is there.
+        (fonts.user_folder() / "TestSans.ttf").unlink()
+        page.click("#side .bsm:text('Refresh fonts')")
+        page.wait_for_function("Compose._S.fonts.length === 2")
+        page.evaluate("() => { Compose._S.text.text = 'AAAA'; return Compose._api.addText(new paper.Point(20, 80)); }")
+        page.wait_for_function("Compose._api.getL().art.children.length === 2")
+        assert page.evaluate("Compose._api.getL().art.lastChild.data.text.fname") == "A First Font Regular"
+        assert abs(_text_width(page) - 1.3 * em) < 0.05                  # three steps of 0.3 em and a letter
+        (fonts.user_folder() / "First.ttf").unlink()                     # and with no font left, it says what to do
+        (fonts.user_folder() / "A-Wide.ttf").unlink()
+        page.click('[data-ct="text"]')
+        page.click("#side .bsm:text('Refresh fonts')")
+        page.wait_for_function("Compose._S.fonts.length === 0")
+        page.evaluate("Compose._api.addText(new paper.Point(20, 120))")
+        page.wait_for_function("document.querySelector('#toast') && /No fonts found/.test(document.querySelector('#toast').textContent)", timeout=10000)
+        assert page.evaluate("Compose._api.getL().art.children.length") == 2
+        assert not errs, errs
+        b.close()
+
+
+def test_text_is_made_of_what_was_asked_for(server):
+    """While new text is being made, another font is picked (or the list is refreshed). The text keeps
+    the font it was asked in. And an edit still on its way when Undo is pressed doesn't spoil Redo."""
+    _make_font(fonts.user_folder() / "TestSans.ttf")
+    _make_font(fonts.user_folder() / "TestWide.ttf", family="Test Wide", advance=1200)
+    fonts.listing(refresh=True)
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.click('a[data-t="compose"]')
+        page.wait_for_function("typeof Compose !== 'undefined' && Compose._S.ready")
+        em = page.evaluate("""async () => {
+          const S = Compose._S, j = await (await fetch('/api/fonts')).json(); S.fonts = j.fonts;
+          S.font = S.fonts.find(f => f.family === 'Test Wide'); S.text.text = 'AAAA';
+          return S.text.size * 25.4 / 72;
+        }""")
+        held, sent = [], []
+        page.on("request", lambda r: sent.append(r.post_data_json) if r.url.endswith("/api/text") else None)
+        page.route("**/api/text", lambda route: held.append(route))      # the answer is slow
+        page.evaluate("() => { window.__adding = Compose._api.addText(new paper.Point(20, 20)); }")   # (not waited for)
+        for _ in range(100):
+            if held:
+                break
+            page.wait_for_timeout(50)
+        assert len(held) == 1
+        page.evaluate("() => { Compose._S.font = Compose._S.fonts.find(f => f.family === 'Test Sans'); Compose._S.text.text = 'A'; }")
+        held[0].continue_()
+        page.unroute("**/api/text")
+        page.evaluate("window.__adding")
+        made = page.evaluate("(({text, fname}) => [text, fname])(Compose._api.getL().art.lastChild.data.text)")
+        assert made == ["AAAA", "Test Wide Regular"]                     # used to say A, in Test Sans
+        assert abs(_text_width(page) - 4.0 * em) < 0.05
+
+        face = page.evaluate("Compose._api.getL().art.lastChild.data.text.face")
+        assert len(face) == 40 and "face" not in sent[-1]                # new text: whichever font has that id
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {spacing: 100})")
+        _wait_for_width(page, 4.3 * em)
+        assert sent[-1]["face"] == face                                  # drawn again: only from that very font
+        page.evaluate("() => { Compose._api.retext(Compose._api.getL().art.lastChild, {spacing: 500}); Compose._api.undo(); }")   # Undo while an edit is on its way
+        page.wait_for_timeout(1200)
+        assert abs(_text_width(page) - 4.0 * em) < 0.05
+        assert page.evaluate("Compose._S.hi < Compose._S.hist.length - 1")   # Redo is still there
+        page.evaluate("Compose._api.redo()")
+        assert abs(_text_width(page) - 4.3 * em) < 0.05
         assert not errs, errs
         b.close()
 

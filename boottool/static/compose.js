@@ -208,45 +208,72 @@ const Compose = (() => {
   async function ensureFonts() {
     if (S.fonts) return;
     try {
-      const j = await (await fetch("/api/fonts")).json(); S.fonts = j.fonts; S.fontsFolder = j.folder;
+      const j = await (await fetch("/api/fonts")).json(); S.fonts = j.fonts; S.fontsOther = j.others || []; S.fontsFolder = j.folder;
       let saved = null; try { saved = localStorage.getItem("boottool.font"); } catch (e) {}
       const pick = n => S.fonts.find(f => (f.family + " " + f.style).toLowerCase() === (n || "").toLowerCase());
       S.font = (saved && pick(saved)) || pick("Impact Regular") || pick("Arial Bold") || pick("Arial Narrow Regular") || S.fonts.find(f => /sans/i.test(f.family) && /bold/i.test(f.style)) || S.fonts[0] || null;
     } catch (e) { S.fonts = []; }
   }
+  // An installed font by its id: one from the list, or another version of a listed font (not in the
+  // list, but text set in it keeps it).
+  const fontById = id => (S.fonts || []).concat(S.fontsOther || []).find(f => f.id == id);
   async function outlineText(t) {
     const font = t.font != null ? t.font : S.font && S.font.id;          // existing text keeps its own font
     if (font == null) throw new Error("No fonts found. Put .ttf or .otf files in " + S.fontsFolder);
     const r = await fetch("/api/text", {method: "POST", headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({font, text: t.text, size: t.size, spacing: t.spacing, align: t.align})});
+      body: JSON.stringify({font, face: t.face || undefined, text: t.text, size: t.size, spacing: t.spacing, align: t.align})});
     const j = await r.json(); if (!r.ok) throw new Error(j.error); return j;
   }
   async function addText(at) {
     await ensureFonts();
     try {
-      const t = {...S.text, size: S.text.size * 25.4 / 72, font: S.font.id, fname: S.font.family + " " + S.font.style};
-      const j = await outlineText(t);
+      if (!S.font) throw new Error("No fonts found. Put .ttf or .otf files in " + S.fontsFolder);
+      // What is asked for is what the text is made of, whatever is picked while the answer is on its way.
+      const d = {text: S.text.text, size: S.text.size, spacing: S.text.spacing, align: S.text.align, font: S.font.id, fname: S.font.family + " " + S.font.style, rot: 0};
+      const j = await outlineText({...d, size: d.size * 25.4 / 72});
       const it = new paper.CompoundPath({pathData: j.d, fillColor: S.style.fill || "#000000", insert: false});
       L.art.addChild(it); it.position = at.add([j.w / 2, j.h / 2]);
-      place(it, "text", S.text.text.split("\n")[0].slice(0, 24));
-      it.data.text = {text: S.text.text, size: S.text.size, spacing: S.text.spacing, align: S.text.align, font: S.font.id, fname: t.fname, rot: 0};
+      place(it, "text", d.text.split("\n")[0].slice(0, 24));
+      d.face = j.face;                                                   // exactly which font it was drawn from (see retext)
+      it.data.text = d;
       commit(); select([it]);
     } catch (e) { toast_(e.message); }
   }
-  let textTimer = null;
+  // An edit changes the text's properties at once and its outline a moment later. Until the outline is
+  // there, the properties as drawn are kept, to go back to if it can't be drawn (its font is gone).
+  // Each outline comes with "face", which says exactly which font it was drawn from; it is sent along
+  // the next time, so the text is redrawn from that very font or not at all (never from another font
+  // that has the same name and looks the same to the list).
+  const textEdit = new WeakMap();     // text item -> {was: the edited properties as drawn, n: its latest edit, timer}
   function retext(it, change) {
+    const st = textEdit.get(it) || {was: {}, n: 0, timer: null}; textEdit.set(it, st);
+    const n = ++st.n;
+    for (const k in change) if (!(k in st.was)) st.was[k] = it.data.text[k];   // (only what the edit changes: not its rotation, say)
     Object.assign(it.data.text, change);
-    clearTimeout(textTimer);
-    textTimer = setTimeout(async () => {
+    clearTimeout(st.timer);
+    st.timer = setTimeout(async () => {
       const d = it.data.text;
+      if (!it.isInserted()) { textEdit.delete(it); return; }             // gone meanwhile (undo, delete)
       try {
-        const j = await outlineText({text: d.text, size: d.size * 25.4 / 72, spacing: d.spacing, align: d.align, font: d.font});
+        const j = await outlineText({text: d.text, size: d.size * 25.4 / 72, spacing: d.spacing, align: d.align, font: d.font, face: d.face});
+        if (st.n !== n) return;                                          // a newer edit is on its way
+        textEdit.delete(it);
+        if (!it.isInserted()) return;
+        d.face = j.face;
         const c = it.bounds.center, fill = it.fillColor, stroke = it.strokeColor, sw = it.strokeWidth;
         it.pathData = j.d; it.fillColor = fill; it.strokeColor = stroke; it.strokeWidth = sw;
         it.position = c; if (d.rot) it.rotate(d.rot, c);
         it.name = it.data.name = d.text.split("\n")[0].slice(0, 24) || "Text"; commit(); drawUI(); renderLayersOnly();
-      } catch (e) { toast_(e.message); }
+      } catch (e) {
+        if (st.n !== n) return;
+        Object.assign(d, st.was); textEdit.delete(it);                   // not drawn: the text is as it was
+        toast_(e.message); if (S.sel.length === 1 && S.sel[0] === it) renderSide();   // (only if the Text panel is this text's)
+      }
     }, 220);
+  }
+  function textScaled(it, k) {        // a text was made k times as large by hand: so is its size, drawn and asked for
+    it.data.text.size *= k;
+    const st = textEdit.get(it); if (st && "size" in st.was) st.was.size *= k;
   }
 
   // Type straight onto the page: a box with a caret where you click (Text tool), or double-click existing text (Select tool) to edit it.
@@ -254,7 +281,7 @@ const Compose = (() => {
   async function openEditor(pt, it) {
     await closeEditor(true); await ensureFonts();
     const d = it ? it.data.text : null, size = (d ? d.size : S.text.size) * 25.4 / 72 * paper.view.zoom;
-    const font = d ? (S.fonts || []).find(f => f.id === d.font) : S.font;
+    const font = d ? fontById(d.font) : S.font;
     const at = it ? it.bounds.topLeft : pt, vp = paper.view.projectToView(at);
     const ta = document.createElement("textarea"); ta.spellcheck = false; ta.value = d ? d.text : "";
     const fill = it ? (it.fillColor ? it.fillColor.toCSS(true) : "#000") : (S.style.fill || "#000");
@@ -521,7 +548,7 @@ const Compose = (() => {
     const sx = b.width ? Math.max(w, 0.01) / b.width : 1, sy = b.height ? Math.max(h, 0.01) / b.height : 1;   // a flat line keeps its zero side
     const anyText = S.sel.some(i => kindOf(i) === "text");
     const k = anyText ? sx : null;
-    for (const it of S.sel) { it.scale(k || sx, k || sy, b.topLeft); if (kindOf(it) === "text") it.data.text.size *= sx; }
+    for (const it of S.sel) { it.scale(k || sx, k || sy, b.topLeft); if (kindOf(it) === "text") textScaled(it, sx); }
     const nb = selBounds(); for (const it of S.sel) it.translate(new paper.Point(x - nb.x, y - nb.y));
     commit(); drawUI(); syncProps();
   }
@@ -725,7 +752,7 @@ const Compose = (() => {
     const d = S.drag; S.drag = null; if (!d) return;
     if (d.type === "move") { if (d.moved) commit(); drawUI(); }
     else if (d.type === "scale") {
-      S.sel.forEach(i => { if (kindOf(i) === "text") i.data.text.size *= d.done; });
+      S.sel.forEach(i => { if (kindOf(i) === "text") textScaled(i, d.done); });
       commit(); drawUI();
     }
     else if (d.type === "rotate") {
@@ -1003,23 +1030,38 @@ const Compose = (() => {
     const c = el("div", "cell");
     if (!it) c.append(el("div", "hint", "Click on the page to add text. Change it here afterwards."));
     const ta = el("textarea"); ta.value = d.text; ta.style.height = "64px"; ta.style.fontFamily = "inherit"; ta.style.fontSize = "15px";
-    ta.oninput = () => { if (it) retext(it, {text: ta.value}); else S.text.text = ta.value; };
+    ta.oninput = () => { if (!it) S.text.text = ta.value; else if (ta.value.trim()) retext(it, {text: ta.value}); };   // (an emptied box is only a draft)
+    ta.onblur = () => { if (it && !ta.value.trim()) ta.value = it.data.text.text; };
     c.append(ta);
     const fs = el("select"); fs.style.cssText = "width:100%;margin-top:6px;border:1px solid #000;padding:4px;background:#fff";
     for (const f of S.fonts || []) { const o = el("option", "", esc(f.family + " — " + f.style)); o.value = f.id; fs.append(o); }
-    const curFont = it ? it.data.text.font : (S.font && S.font.id); fs.value = curFont;
-    fs.onchange = () => { const f = (S.fonts || []).find(x => x.id == fs.value); S.font = f; try { localStorage.setItem("boottool.font", f.family + " " + f.style); } catch (e) {} if (it) { it.data.text.font = f.id; it.data.text.fname = f.family + " " + f.style; retextFont(it, f.id); } };
+    const curFont = it ? it.data.text.font : (S.font && S.font.id);
+    if (curFont != null && !(S.fonts || []).some(f => f.id === curFont)) {   // not in the list: say what it is instead of showing another font
+      const f = fontById(curFont), o = el("option", "", f ? esc(f.family + " — " + f.style + " (another version)")
+        : esc(((it && it.data.text.fname) || "This font") + " — not installed"));
+      o.value = curFont; o.disabled = !f; fs.prepend(o);
+    }
+    fs.value = curFont;
+    fs.onchange = () => {
+      const f = fontById(fs.value); if (!f) return;                      // (only installed fonts can be picked)
+      S.font = f; try { localStorage.setItem("boottool.font", f.family + " " + f.style); } catch (e) {}
+      if (it) retext(it, {font: f.id, fname: f.family + " " + f.style, face: null});   // (another font: whichever one has that id now)
+    };
     c.append(fs);
     c.append(field("Size (pt)", num(d.size, 1), v => { if (it) retext(it, {size: Math.max(+v || 1, 1)}); else S.text.size = Math.max(+v || 1, 1); }, 70));
     c.append(field("Letter spacing", d.spacing, v => { if (it) retext(it, {spacing: +v || 0}); else S.text.spacing = +v || 0; }, 70));
     c.append(seg([["left", "Left"], ["center", "Centre"], ["right", "Right"]], d.align, a => { if (it) retext(it, {align: a}); else S.text.align = a; renderSide(); }));
     c.append(el("div", "hint", `Need another font? Put .ttf or .otf files in <b>${esc(S.fontsFolder || "~/BootTool/Fonts")}</b> and press Refresh.`));
-    const rf = el("span", "bsm", "Refresh fonts"); rf.style.display = "inline-block"; rf.style.marginTop = "6px"; rf.onclick = async () => { const j = await (await fetch("/api/fonts?refresh=1")).json(); S.fonts = j.fonts; renderSide(); }; c.append(rf);
+    const rf = el("span", "bsm", "Refresh fonts"); rf.style.display = "inline-block"; rf.style.marginTop = "6px"; rf.onclick = async () => {
+      const j = await (await fetch("/api/fonts?refresh=1")).json(); S.fonts = j.fonts; S.fontsOther = j.others || [];
+      S.font = (S.font && fontById(S.font.id)) || S.fonts[0] || null;    // the font for new text, if it is still there
+      renderSide();
+    };
+    c.append(rf);
     b.append(c);
     if (it) b.append(btns([["Turn into a plain shape", () => { it.data.kind = "shape"; commit(); renderSide(); }]]));
     return b;
   }
-  function retextFont(it, fid) { S.font = (S.fonts || []).find(f => f.id == fid) || S.font; retext(it, {}); }
   function toolBox() {
     if (S.tool === "shape") return box("Shape", seg([["rect", "Rectangle"], ["ellipse", "Ellipse"], ["polygon", "Polygon"], ["star", "Star"]], S.shape, v => { S.shape = v; renderSide(); }, true),
       (S.shape === "polygon" || S.shape === "star") ? (() => { const c = el("div", "cell"); c.append(field(S.shape === "star" ? "Points" : "Sides", S.sides, v => { S.sides = Math.min(Math.max(Math.round(+v) || 5, 3), 24); })); return c; })() : null,
