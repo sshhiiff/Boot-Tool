@@ -31,7 +31,9 @@ jobs:
         run: |
           C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-ucrt-x86_64-librsvg
           C:\msys64\ucrt64\bin\rsvg-convert.exe --version
-      - run: pip install -e ".[dev]" playwright
+      - name: Install the exact versions (installer/build-constraints.txt), the same as the downloads
+        shell: bash
+        run: bash installer/pinned_env.sh -e ".[dev]" playwright
       - name: Browser for the interface tests
         run: python -m playwright install --with-deps chromium
       - run: pytest -q

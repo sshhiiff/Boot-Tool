@@ -26,7 +26,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -e . pyinstaller
+      - name: Install the exact versions (installer/build-constraints.txt) into a clean environment
+        shell: bash
+        run: bash installer/pinned_env.sh -e . pyinstaller
       - run: pyinstaller --noconfirm installer/BootTool.spec
       - name: Start the app and use it once
         run: python installer/smoke_test.py dist/BootTool/BootTool
