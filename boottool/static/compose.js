@@ -104,6 +104,7 @@ const Compose = (() => {
   const rotPoint = b => new paper.Point(b.center.x, b.top - px(26));
   function drawUI() {
     if (!S.ready) return;
+    syncProps();                       // the X / Y / Width / Height boxes follow whatever was just changed (edited text, say)
     L.ui.removeChildren();
     const sz = px(8);
     if (S.tool === "nodes") drawNodes();
@@ -518,17 +519,19 @@ const Compose = (() => {
   // ------------------------------------------------------------------ transforms by number / buttons
   function setBounds(x, y, w, h) {
     const b = selBounds(); if (!b) return;
-    const sx = b.width ? Math.max(w, 0.01) / b.width : 1, sy = b.height ? Math.max(h, 0.01) / b.height : 1;   // a flat line keeps its zero side
+    const ratio = (want, have) => have && Math.abs(want - have) > 1e-9 ? Math.max(want, 0.01) / have : 1;   // a flat line keeps its zero side; a side that isn't changed isn't touched
+    let sx = ratio(w, b.width), sy = ratio(h, b.height);
     const anyText = S.sel.some(i => kindOf(i) === "text");
+    if (anyText) sx = sy = Math.abs(sy - 1) > Math.abs(sx - 1) ? sy : sx;   // text keeps its proportions: it follows the side that was changed
     const k = anyText ? sx : null;
     for (const it of S.sel) { it.scale(k || sx, k || sy, b.topLeft); if (kindOf(it) === "text") it.data.text.size *= sx; }
     const nb = selBounds(); for (const it of S.sel) it.translate(new paper.Point(x - nb.x, y - nb.y));
-    commit(); drawUI(); syncProps();
+    commit(); drawUI();
   }
   function rotateSel(deg) {
     const b = selBounds(); if (!b) return;
     for (const it of S.sel) { it.rotate(deg, b.center); if (kindOf(it) === "text") it.data.text.rot = ((it.data.text.rot || 0) + deg) % 360; }
-    commit(); drawUI(); syncProps();
+    commit(); drawUI();
   }
   function flip(h) {
     const b = selBounds(); if (!b) return;
@@ -538,7 +541,7 @@ const Compose = (() => {
   function alignBoard(axis) {
     const b = selBounds(); if (!b) return;
     const dx = axis === "x" ? S.W / 2 - b.center.x : 0, dy = axis === "y" ? S.H / 2 - b.center.y : 0;
-    for (const it of S.sel) it.translate(new paper.Point(dx, dy)); commit(); drawUI(); syncProps();
+    for (const it of S.sel) it.translate(new paper.Point(dx, dy)); commit(); drawUI();
   }
   function order(kind) {
     for (const it of kind === "front" || kind === "up" ? S.sel.slice() : S.sel.slice().reverse()) {
@@ -698,7 +701,7 @@ const Compose = (() => {
         for (const my of [nb.top, nb.center.y, nb.bottom]) for (const gy of ys) if (Math.abs(my - gy) < th && !sy) { sy = gy - my; d.guides.push([new paper.Point(-50, gy), new paper.Point(S.W + 50, gy)]); }
       }
       const want = d.b0.point.add(tot).add([sx, sy]), cur = selBounds().point, dl = want.subtract(cur);
-      for (const it of S.sel) it.translate(dl); drawUI(); syncProps();
+      for (const it of S.sel) it.translate(dl); drawUI();
     } else if (d.type === "scale") {
       const b = d.b0, {ix, iy} = d, ax = ix < 0 ? b.right : ix > 0 ? b.left : b.center.x, ay = iy < 0 ? b.bottom : iy > 0 ? b.top : b.center.y;
       const hx = ix < 0 ? b.left : ix > 0 ? b.right : b.center.x, hy = iy < 0 ? b.top : iy > 0 ? b.bottom : b.center.y;
@@ -712,11 +715,11 @@ const Compose = (() => {
       for (const it of S.sel) it.scale(sx, sy, new paper.Point(ax, ay));
       d.done = tx;
       if (d.raf) return;
-      d.raf = true; requestAnimationFrame(() => { d.raf = false; drawUI(); syncProps(); });
+      d.raf = true; requestAnimationFrame(() => { d.raf = false; drawUI(); });
     } else if (d.type === "rotate") {
       let tot = e.point.subtract(d.c).angle - d.a0; if (e.event.shiftKey) tot = Math.round(tot / 15) * 15;
       const dl = tot - d.tot; d.tot = tot;
-      for (const it of S.sel) it.rotate(dl, d.c); drawUI(); syncProps();
+      for (const it of S.sel) it.rotate(dl, d.c); drawUI();
     } else if (d.type === "marquee") {
       drawUI(); L.ui.addChild(new paper.Path.Rectangle({rectangle: new paper.Rectangle(d.a, e.point), strokeColor: "#404040", strokeWidth: 1, strokeScaling: false, dashArray: [4, 3], fillColor: new paper.Color(0, 0, 0, 0.06)}));
     }
@@ -810,7 +813,7 @@ const Compose = (() => {
     if (dir && (S.sel.length || S.nodes.length)) {
       e.preventDefault(); const dl = new paper.Point(dir[0] * step, dir[1] * step);
       if (S.tool === "nodes" && S.nodes.length) { for (const s of S.nodes) s.point = s.point.add(dl); markShape(S.sel); } else for (const it of S.sel) it.translate(dl);
-      commit(); drawUI(); syncProps();
+      commit(); drawUI();
     }
   }
 
@@ -881,7 +884,7 @@ const Compose = (() => {
   const propEls = {};
   function syncProps() {
     const b = selBounds(); if (!b) return;
-    const set = (k, v) => { if (propEls[k] && document.activeElement !== propEls[k]) propEls[k].value = fu(v); };
+    const set = (k, v) => { const e = propEls[k]; if (e && !(e._typed && document.activeElement === e)) e.value = fu(v); };   // (not a box that is being typed in)
     set("x", b.x); set("y", b.y); set("w", b.width); set("h", b.height);
   }
   function renderLayersOnly() { const o = root && root.querySelector("#clayers"); if (o) o.replaceWith(layersBox()); }
@@ -946,7 +949,12 @@ const Compose = (() => {
     const b = el("div", "box"), kinds = [...new Set(S.sel.map(kindOf))];
     b.append(el("div", "bh", S.sel.length === 1 ? esc((S.sel[0].data && S.sel[0].data.name) || "Selected") : `${S.sel.length} selected`));   // names come from file names and typed text
     const c = el("div", "cell"), bb = selBounds();
-    const mk = (k, l, f) => { const r = field(l, fu(bb[k === "w" ? "width" : k === "h" ? "height" : k]), f); propEls[k] = r._i; return r; };
+    const mk = (k, l, f) => {
+      const r = field(l, fu(bb[k === "w" ? "width" : k === "h" ? "height" : k]), f), i = r._i; propEls[k] = i;
+      i.oninput = () => { i._typed = true; };                            // typed in: left alone until it is entered or given up,
+      i.addEventListener("blur", () => { i._typed = false; syncProps(); });   // then it shows what is there again
+      return r;
+    };
     const now = () => selBounds() || bb;                     // the selection may have moved since this panel was drawn
     c.append(mk("x", "X", v => { const b = now(); setBounds(tu(v), b.y, b.width, b.height); }),
       mk("y", "Y", v => { const b = now(); setBounds(b.x, tu(v), b.width, b.height); }),

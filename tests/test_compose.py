@@ -392,6 +392,79 @@ def test_groups_and_fill_tool_in_the_browser(server):
         b.close()
 
 
+def test_size_boxes_for_text(server):
+    """Typing a Height for text did nothing unless "Keep proportions" was ticked, and the Width box kept
+    its old number after the text was edited."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    _make_font(fonts.user_folder() / "TestSans.ttf")
+    fonts.listing(refresh=True)
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.click('a[data-t="compose"]')
+        page.wait_for_function("typeof Compose !== 'undefined' && Compose._S.ready")
+        bounds = "(() => { const b = Compose._api.getL().art.lastChild.bounds; return [b.width, b.height]; })()"
+        box = "l => [...document.querySelectorAll('.cell input')].findLast(i => (i.closest('label,div') || {}).textContent.trim() === l).value"
+
+        def type_in(label, value):
+            n = page.evaluate("l => [...document.querySelectorAll('.cell input')].findLastIndex(i => (i.closest('label,div') || {}).textContent.trim() === l)", label)
+            assert n >= 0, label
+            i = page.locator(".cell input").nth(n)
+            i.fill(str(value))
+            i.press("Enter")
+
+        page.evaluate("""async () => {
+          const A = Compose._api, S = Compose._S, L = A.getL();
+          const j = await (await fetch('/api/fonts')).json(); S.fonts = j.fonts;
+          S.font = S.fonts.find(f => f.family === 'Test Sans'); S.text.text = 'AA';
+          await A.addText(new paper.Point(20, 20));
+          A.select([L.art.lastChild]);
+        }""")
+        w0, h0 = page.evaluate(bounds)
+        page.uncheck(".chk input")                                         # Keep proportions: off
+        type_in("Height", float(page.evaluate(box, "Height")) * 2)
+        w1, h1 = page.evaluate(bounds)
+        assert abs(h1 - 2 * h0) < 0.05 and abs(w1 - 2 * w0) < 0.05          # used to stay as it was
+        assert abs(page.evaluate("Compose._api.getL().art.lastChild.data.text.size") - 72) < 0.01   # (so the next edit keeps the size)
+        type_in("Width", float(page.evaluate(box, "Width")) / 2)
+        assert all(abs(a - b_) < 0.05 for a, b_ in zip(page.evaluate(bounds), (w0, h0)))
+
+        shown = float(page.evaluate(box, "Width"))
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {text: 'AAAAAA'})")   # the text is edited
+        page.wait_for_function("w => Compose._api.getL().art.lastChild.bounds.width > w * 2", arg=w0, timeout=20000)
+        w2, h2 = page.evaluate(bounds)
+        page.wait_for_function("([l, v]) => Math.abs(parseFloat([...document.querySelectorAll('.cell input')].findLast(i => (i.closest('label,div') || {}).textContent.trim() === l).value) - v) < 0.02 * v",
+                               arg=["Width", shown * w2 / w0], timeout=5000)   # the Width box follows (it used to keep the old number)
+        assert abs(h2 - h0) < 0.05
+
+        n = page.evaluate("l => [...document.querySelectorAll('.cell input')].findLastIndex(i => (i.closest('label,div') || {}).textContent.trim() === l)", "Width")
+        width_box = page.locator(".cell input").nth(n)
+        width_box.click()                                                  # the cursor is in the Width box, nothing typed,
+        shown = float(width_box.input_value())
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {text: 'AA'})")   # and the text is edited
+        page.wait_for_function("w => Compose._api.getL().art.lastChild.bounds.width < w * 0.6", arg=w2, timeout=20000)
+        page.wait_for_function("([n, v]) => Math.abs(parseFloat(document.querySelectorAll('.cell input')[n].value) - v) < 0.02 * v",
+                               arg=[n, shown * w0 / w2], timeout=5000)     # the box follows all the same
+        width_box.fill("5")                                                # typed, not entered yet: left alone by a redraw
+        page.evaluate("Compose._api.retext(Compose._api.getL().art.lastChild, {text: 'AAA'})")
+        page.wait_for_function("w => Compose._api.getL().art.lastChild.bounds.width > w * 1.2", arg=w0, timeout=20000)
+        page.wait_for_timeout(300)
+        assert width_box.input_value() == "5"
+        width_box.press("Enter")
+        wide = page.evaluate(bounds)[0]
+        assert abs(float(width_box.input_value()) / 5 - 1) < 0.01 and wide > 0   # entered: the text is that wide, and the box says so
+
+        type_in("Width", 0.01)                                             # very small text, then only moved:
+        tiny = page.evaluate(bounds)
+        type_in("X", float(page.evaluate(box, "X")) + 10)
+        assert all(abs(a - b_) < 1e-6 for a, b_ in zip(page.evaluate(bounds), tiny))   # moving it doesn't resize it
+        assert not errs, errs
+        b.close()
+
+
 def test_position_and_size_boxes(server):
     """Typing X then Y moves to both; a flat line survives the boxes; the boxes follow a drag."""
     sync_api = pytest.importorskip("playwright.sync_api")
