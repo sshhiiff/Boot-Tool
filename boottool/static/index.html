@@ -590,7 +590,8 @@ function bindConvert() {
   else P.convert = SHARED;
 }
 async function addFiles(files) {
-  files = [...files].filter(isImg); if (!files.length) return;
+  files = [...files].filter(isImg); if (!files.length) return;             // taken down now: the box they were chosen in is emptied the next moment
+  try { await READY; } catch (e) { return toast(e.message); }               // (the settings first: see "boot")
   BATCH.adding += files.length; setMode("batch"); let bad = 0;
   for (const f of files) {
     try {
@@ -881,7 +882,14 @@ function renderSide() {
 }
 
 // ---------------------------------------------------------------- tabs
-document.querySelectorAll("#nav a").forEach(a => a.onclick = () => setTool(a.dataset.t));
+// Until the settings have arrived from Boot Tool (see "boot") no tab can be drawn. A tab clicked in
+// that first moment is remembered and opened as soon as they are here.
+let booted = false, wanted = "", unanswered = "";
+document.querySelectorAll("#nav a").forEach(a => a.onclick = () => {
+  if (booted) return setTool(a.dataset.t);
+  if (unanswered) return toast(unanswered);                                 // (they never came: see "boot")
+  wanted = a.dataset.t; document.querySelectorAll("#nav a").forEach(b => b.classList.toggle("on", b === a));
+});
 function setTool(t) {
   if (EYE.on && t !== "print") eyeOff();
   const was = tool; tool = t; document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.t === t));
@@ -915,6 +923,7 @@ document.body.addEventListener("drop", e => { e.preventDefault(); $("#drop").cla
 ["pointerdown", "wheel", "dblclick"].forEach(t => $("#batch").addEventListener(t, e => e.stopPropagation(), {passive: true}));
 async function load(file, to) {
   try {
+    await READY;                                                            // (the settings first: see "boot")
     const r = await fetch("/api/upload", {method: "POST", body: file}), j = await r.json(); if (!r.ok) throw new Error(j.error);
     IMG = {hist: j.hist || null, auto: j.auto || [0, 1, 255], tonal: !!j.tonal};
     const lv = IMG.tonal ? IMG.auto : [0, 1, 255]; [P.print.lv_black, P.print.lv_gamma, P.print.lv_white] = lv; P.print.colors = []; P.print.names = []; P.print.angles_s = [];
@@ -1039,8 +1048,8 @@ function setMode(m) {
   $("#svgimg").style.opacity = m === "overlay" ? $("#ovo").value / 100 : 1; $("#bar").style.display = m === "split" ? "block" : "none";
   $("#ovl").style.display = m === "overlay" ? "flex" : "none"; applySplit();
 }
-document.querySelectorAll("#toolbar [data-m]").forEach(b => b.onclick = () => setMode(b.dataset.m));
-$("#ovo").oninput = () => setMode("overlay");
+document.querySelectorAll("#toolbar [data-m]").forEach(b => b.onclick = () => booted && setMode(b.dataset.m));   // (not before the settings are here)
+$("#ovo").oninput = () => booted && setMode("overlay");
 function applySplit() { $("#svgimg").style.clipPath = mode === "split" ? `inset(0 0 0 ${split * 100}%)` : "none"; $("#bar").style.left = split * 100 + "%"; }
 document.querySelectorAll("#bgs [data-bg]").forEach(b => b.onclick = () => {
   document.querySelectorAll("#bgs [data-bg]").forEach(x => x.classList.toggle("on", x === b));
@@ -1073,9 +1082,13 @@ window.addEventListener("resize", () => imageId && fit());
 function toast(m) { const t = $("#toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._t); t._t = setTimeout(() => t.style.display = "none", 6000); }
 
 // ---------------------------------------------------------------- boot
-fetch("/api/defaults").then(r => r.json()).then(d => {
+const READY = fetch("/api/defaults").then(r => r.json()).then(d => {
   DEF = d; if (d.version) $("#ver").textContent = "v" + d.version; P.convert = {...d.convert}; SHARED = P.convert; P.print = {...d.print, stamp: PLUS.slice(), colors: [], names: [], cmyk_colors: [], angles_c: [], angles_s: []}; PG = {...d.page};
-  setTool("convert"); setMode("svg");
+  setTool("convert"); setMode("svg"); booted = true;
+  if (wanted && wanted !== "convert") setTool(wanted);                      // the tab that was clicked while this was on its way
+}).catch(e => { console.error(e); throw new Error("Boot Tool did not answer. Check that it is still running, then reload this page."); });
+READY.catch(e => {                                                          // nothing can be drawn: say so (a tab or a picture that is tried says it again)
+  unanswered = e.message; toast(unanswered); document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.t === "convert"));
 });
 </script>
 <script src="/static/compose.js"></script>

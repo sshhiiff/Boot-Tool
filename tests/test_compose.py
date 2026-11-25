@@ -332,6 +332,112 @@ def test_type_on_the_page_layer_thumbnails_and_shortcuts(server):
         b.close()
 
 
+def _page_before_its_settings(sync_api, p, server):
+    """The page opened, with its settings (/api/defaults) still on their way: (browser, page, errors, let them through)."""
+    b = p.chromium.launch()
+    page = b.new_page(viewport={"width": 1400, "height": 900})
+    errs, held = [], []
+    page.on("pageerror", lambda e: errs.append(str(e)))
+    page.route("**/api/defaults", lambda route: held.append(route))
+    page.goto(server + "/")
+    for _ in range(100):
+        if held:
+            break
+        page.wait_for_timeout(20)
+    assert held and page.evaluate("document.querySelector('#ver').textContent") in ("", "v")   # asked for, not here yet
+    return b, page, errs, lambda: held[0].continue_()
+
+
+@pytest.mark.parametrize("tab", ["compose", "simulate", "print", "help"])
+def test_a_tab_clicked_before_the_settings_arrive_is_the_tab_you_get(server, tab):
+    """The page asks Boot Tool for its settings when it opens, and showed Convert when they arrived:
+    a tab clicked in that first moment was undone. (On a slow machine that is a long moment; the
+    browser tests click Compose at once, and one of them failed that way now and then.) The click is
+    remembered now, and the tab opened when the settings are here."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b, page, errs, let_through = _page_before_its_settings(sync_api, p, server)
+        page.click(f'a[data-t="{tab}"]')
+        assert page.evaluate("[...document.querySelectorAll('#nav a.on')].map(a => a.dataset.t)") == [tab]   # the click shows at once
+        let_through()
+        page.wait_for_function("document.querySelector('#ver').textContent.length > 1")
+        page.wait_for_timeout(200)
+        assert page.evaluate("[...document.querySelectorAll('#nav a.on')].map(a => a.dataset.t)") == [tab]
+        assert page.evaluate("tool") == tab
+        if tab == "compose":
+            page.wait_for_function("typeof Compose !== 'undefined' && Compose._S.ready")
+            assert page.evaluate("getComputedStyle(document.querySelector('#vp')).display") == "none"
+        if tab == "help":
+            assert page.evaluate("getComputedStyle(document.querySelector('#help')).display") == "block"
+        page.click('a[data-t="convert"]')                                   # and the tabs work as ever afterwards
+        assert page.evaluate("tool") == "convert"
+        assert not errs, errs
+        b.close()
+
+
+def test_a_picture_opened_before_the_settings_arrive_is_opened_when_they_do(server, lineart):
+    """A picture chosen in that first moment waits for the settings too, and is then traced with them."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b, page, errs, let_through = _page_before_its_settings(sync_api, p, server)
+        sent = []
+        page.on("request", lambda r: sent.append(r.url))
+        page.set_input_files("#file", str(lineart))
+        page.click("#toolbar [data-m=batch]")                               # (and the Batch button, pressed too early, does nothing)
+        page.wait_for_timeout(300)
+        assert not [u for u in sent if "/api/upload" in u]                  # not sent to be traced without the settings
+        assert page.evaluate("imageId") is None and page.evaluate("mode") == "svg" and not errs, errs
+        let_through()
+        page.wait_for_function("/Paths/i.test(document.querySelector('#stats').textContent)", timeout=60000)   # traced
+        assert page.evaluate("tool") == "convert" and page.evaluate("imageId") and page.evaluate("P.convert.mode") and not errs, errs
+        b.close()
+
+
+def test_if_the_settings_never_arrive_the_page_says_so(server, lineart):
+    """Boot Tool stopped, or its answer lost: the page cannot draw anything. It says so in plain
+    words, at once and again when a tab is clicked or a picture opened, and marks no tab that it
+    cannot show."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.route("**/api/defaults", lambda route: route.abort())
+        page.goto(server + "/")
+        page.wait_for_function("document.querySelector('#toast').style.display === 'block'")
+        assert "Boot Tool did not answer" in page.evaluate("document.querySelector('#toast').textContent")
+        for try_it in (lambda: page.click('a[data-t="compose"]'), lambda: page.set_input_files("#file", str(lineart))):
+            page.evaluate("document.querySelector('#toast').style.display = 'none'")
+            try_it()
+            page.wait_for_function("document.querySelector('#toast').style.display === 'block'")
+            assert "Boot Tool did not answer" in page.evaluate("document.querySelector('#toast').textContent")
+            assert page.evaluate("[...document.querySelectorAll('#nav a.on')].map(a => a.dataset.t)") == ["convert"]
+        assert page.evaluate("imageId") is None and not errs, errs           # (no error left for the browser to report, either)
+        b.close()
+
+
+def test_add_images_in_the_batch_view_adds_them(server, lineart, tmp_path):
+    """"Add images" empties its file box as soon as the pictures are chosen. Waiting for the settings
+    before taking the pictures down lost them all: nothing was added, without a word."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    second = tmp_path / "second.png"
+    second.write_bytes(lineart.read_bytes())
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.wait_for_function("document.querySelector('#ver').textContent.length > 1")   # the settings are here
+        page.click("#toolbar [data-m=batch]")
+        page.set_input_files("#side input[type=file][multiple]:not([webkitdirectory])", [str(lineart), str(second)])
+        page.wait_for_function("BATCH.items.length === 2 && !BATCH.adding", timeout=60000)
+        assert page.evaluate("BATCH.items.map(i => i.name)") == ["line.png", "second.png"]
+        assert not errs, errs
+        b.close()
+
+
 def test_names_with_html_are_shown_as_text(server):
     """A graphic's name comes from its file name; it must be shown as written, never run as part of the page."""
     sync_api = pytest.importorskip("playwright.sync_api")
