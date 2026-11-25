@@ -280,6 +280,7 @@ textarea{width:100%;height:110px;background:#fff;border:1px solid #000;font:12px
       <p>Shows your designs on a T-shirt drawn to real size. Choose the size (XS to XXL, unisex chart), short or long sleeve, front or back, and the shirt colour (or <b>Use Print colour</b>). Hover the <b>Libraries</b> tab at the bottom and click a design from the Convert or Print library to put it on the shirt; add up to 10 per side. Drag to move (it snaps to the centre line), drag a corner to resize, or type Width, Height, From collar and From centre in cm. <b>Centre</b>, <b>Chest</b> and <b>Full front</b> are quick placements. You can also drag a design from the library onto the shirt. The round handle above a selected design rotates it (hold Shift to snap to 15°), or type an angle. <b>Crop designs to the shirt</b> (on by default) hides anything that hangs past the shirt, like a clipping mask. Arrow keys nudge by 1 mm (Shift: 1 cm), Delete removes. <b>Save mock-up as JPG</b> saves the picture; tick <b>Include measurements</b> to add the size lines to it.</p>
       <ul><li>Downloaded plates are always pure black, with registration marks and the ink name on every plate.</li>
       <li>The ink name is live text in Arial Narrow. In Illustrator use Type → Create Outlines if you need it as shapes.</li>
+      <li>PDF downloads have one page per plate, at the page's real size. There the ink name is in Helvetica, and letters outside the Western European alphabets are shown as "?".</li>
       <li>Everything runs on your own computer. Nothing is uploaded anywhere.</li></ul>
     </div>
   </div>
@@ -565,10 +566,11 @@ function inkListBox() {
 function downloadBox() {
   return {build: () => {
     const b = el("div", "box"); b.style.borderBottom = "0"; b.append(el("div", "bh", "Download"));
-    b.append(el("div", "cell", `<div class="hint" style="margin:0">Downloads are always pure black, one plate per layer, named by ink, with registration marks. The preview keeps ink colours.</div>`));
+    b.append(el("div", "cell", `<div class="hint" style="margin:0">Downloads are always pure black, one plate per layer (SVG) or per page (PDF), named by ink, with registration marks. The preview keeps ink colours.</div>`));
     const a = el("button", "btn go", "Layered SVG — one layer per plate"), z = el("button", "btn", "All plates — .zip, one SVG each");
-    a.disabled = z.disabled = !lastRes || !lastRes.plates.length; dlBtns = [a, z];
-    a.onclick = () => dl("svg"); z.onclick = () => dl("zip"); b.append(a, z);
+    const pa = el("button", "btn", "PDF — one page per plate"), pz = el("button", "btn", "All plates — .zip, one PDF each");
+    a.disabled = z.disabled = pa.disabled = pz.disabled = !lastRes || !lastRes.plates.length; dlBtns = [a, z, pa, pz];
+    a.onclick = () => dl("svg"); z.onclick = () => dl("zip"); pa.onclick = () => dlPdf("pdf"); pz.onclick = () => dlPdf("pdfzip"); b.append(a, z, pa, pz);
     if (tool === "print") {
       const sp = el("button", "btn", "Save to Print library"); sp.title = "Keep this design, at its printed size and in its ink colours, so Simulate can put it on a shirt";
       sp.disabled = a.disabled; dlBtns.push(sp); sp.onclick = saveToPrintLibrary; b.append(sp);
@@ -1018,6 +1020,21 @@ async function saveToPrintLibrary() {
     if (!r2.ok) throw new Error(k.error);
     toast(`Saved as ${k.name}. Find it in Simulate › Libraries › Print.`);
   } catch (e) { toast("Not saved: " + e.message); }
+}
+let pdfBusy = false;
+async function dlPdf(kind) {                          // "pdf": one file, a page per plate; "pdfzip": a .zip with one PDF per plate
+  if (!imageId) return;
+  if (pdfBusy) return toast("Still making the PDF…");                  // one at a time: a second click must not start it again
+  const name = `${fileName}-${tool}-${kind === "pdf" ? "plates.pdf" : "plates-pdf.zip"}`;   // named now: another picture may be open by the time it arrives
+  pdfBusy = true; toast("Making the PDF…");
+  const note = setInterval(() => toast("Still making the PDF…"), 5000);   // big halftones take a while, and a note goes away after 6 seconds
+  try {
+    const r = await fetch("/api/download", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({...payload(0), kind})});
+    if (!r.ok) { const j = await r.json(); throw new Error(j.error); }
+    const u = URL.createObjectURL(await r.blob()), a = document.createElement("a"); a.href = u; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(u), 4000);
+    toast("PDF downloaded.");
+  } catch (e) { toast(e.message); }
+  finally { clearInterval(note); pdfBusy = false; }
 }
 async function dl(kind) {
   if (!imageId) return;

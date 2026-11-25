@@ -77,6 +77,10 @@ def main(exe: str) -> None:
                 {"id": image["id"], "tool": "print", "session": "smoke", "seq": 2, "params": params, "page": {}}).encode())[1])
             assert res["plates"] and (plates is None or len(res["plates"]) == plates), f"print {params} made {len(res['plates'])} plates"
             print("print", params["method"], "->", [p["name"] for p in res["plates"]])
+        pdf = _request(url + "api/download", json.dumps(
+            {"id": image["id"], "tool": "print", "params": params, "page": {}, "kind": "pdf"}).encode())[1]
+        assert pdf.startswith(b"%PDF-") and pdf.rstrip().endswith(b"%%EOF"), "the plates were not written as PDF"
+        print("pdf:", len(pdf), "bytes")
 
         fonts = json.loads(_request(url + "api/fonts")[1])["fonts"]
         if fonts:

@@ -30,6 +30,7 @@ from . import printing as pr
 from . import separate as sep
 from .config import Params
 from .page import coerce_page, compose, layered_svg, plates_zip
+from .pdf import plates_pdf, plates_pdf_zip
 from .preprocess import prepare
 from .score import score_or_none
 from .simplify import postprocess, svg_stats
@@ -197,9 +198,16 @@ def download_response(engine: "Engine", req: dict):
         job = _plate_job(engine, req.get("tool", ""), req["id"], req)
         if not job.plates:
             raise ValueError("Nothing to download: no plates were produced.")
-        if req.get("kind") == "zip":
+        kind = req.get("kind")
+        if kind == "zip":
             return plates_zip(job), "application/zip"
-        return layered_svg(job).encode("utf-8"), "image/svg+xml"
+        if kind not in ("pdf", "pdfzip"):
+            return layered_svg(job).encode("utf-8"), "image/svg+xml"
+    # A PDF of fine halftones takes a few seconds to write: done after the lock is let go, so other
+    # requests need not wait for it to finish (the plates themselves are finished and not changed).
+    if kind == "pdf":
+        return plates_pdf(job), "application/pdf"
+    return plates_pdf_zip(job), "application/zip"
 
 
 def _scores(svg, prep) -> dict:

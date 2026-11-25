@@ -55,6 +55,7 @@ Screen-print plates on a real page. Pick a **Method**:
 - Registration marks: six (three top, three bottom) or four corners, default 2 pt, pure black, on every plate.
 - Ink name printed on every plate (optional).
 - **Layered SVG**: one file, one layer per plate. **.zip**: one SVG per plate.
+- **PDF**: one file, one page per plate, at the page's real size. **.zip**: one PDF per plate.
 - Downloads are always pure black. The preview keeps ink colours; the single-plate tabs show the film as it will print.
 
 ## Notes and limits
