@@ -73,6 +73,63 @@ def test_batch_never_overwrites_existing_files(server, lineart, tmp_path):
     assert st["items"][0]["saved_as"] == "x-2.svg"
 
 
+def test_removing_a_row_after_a_batch_keeps_the_other_results(server, lineart, color):
+    """Taking one picture off the list after a batch used to throw every result away: the other rows
+    went back to "ready" and the .zip could not be downloaded any more. So did adding a picture."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    rows = "[...document.querySelectorAll('.brow')].map(r => [r.querySelector('div[style*=ellipsis]').textContent, r.querySelector('.bchip:last-of-type').textContent, r.querySelectorAll('.bth img').length])"
+    zip_off = "[...document.querySelectorAll('#side button')].find(b => /zip/.test(b.textContent)).disabled"
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900}, accept_downloads=True)
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.wait_for_function("document.querySelector('#ver').textContent.length > 1")
+        page.click("#toolbar [data-m=batch]")
+        add = "#side input[type=file][multiple]:not([webkitdirectory])"
+        page.set_input_files(add, [str(color), str(lineart)])
+        page.wait_for_function("BATCH.items.length === 2 && !BATCH.adding", timeout=60000)
+        page.click("#side button:text-is('Convert')")
+        page.wait_for_function("BATCH.status && BATCH.status.finished", timeout=180000)
+        assert page.evaluate(rows) == [["color.png", "DONE", 2], ["line.png", "DONE", 2]]   # each with its picture and its SVG
+
+        def names_in_the_zip():
+            with page.expect_download(timeout=60000) as d:
+                page.click("#side button:text-is('Download .zip of the SVGs')")
+            return zipfile.ZipFile(d.value.path()).namelist()
+        assert sorted(names_in_the_zip()) == ["color.svg", "line.svg"]
+
+        page.click(".brow:first-child [data-rm]")                          # the first picture is taken off the list
+        page.wait_for_function("BATCH.items.length === 1")
+        assert page.evaluate(rows) == [["line.png", "DONE", 2]]            # used to go back to READY, without its SVG
+        thumb = "document.querySelector('.brow .bth:nth-of-type(3) img')"
+        page.wait_for_function(thumb + ".naturalWidth > 0")
+        shown = page.evaluate(f"fetch({thumb}.src).then(r => r.text())")    # and it is the line art's SVG that shows, not the removed picture's
+        assert shown == zipfile.ZipFile(io.BytesIO(_get(f"{server}/api/batch/zip?job={page.evaluate('BATCH.job')}")[1])).read("line.svg").decode()
+        assert "1 of 1 done" in page.evaluate("document.querySelector('#batchHead').textContent")
+        assert "Done" in page.evaluate("document.querySelector('#stats').textContent") and page.evaluate("BATCH.status.counts.done") == 1
+        assert not page.evaluate(zip_off) and names_in_the_zip() == ["line.svg"]   # the .zip has what is still on the list
+
+        page.set_input_files(add, [str(color)])                            # a picture added now is new; the result stays
+        page.wait_for_function("BATCH.items.length === 2 && !BATCH.adding", timeout=60000)
+        assert page.evaluate(rows) == [["line.png", "DONE", 2], ["color.png", "READY", 1]]
+
+        page.click(".brow:first-child [data-rm]")                          # the last result goes: nothing left to download
+        page.wait_for_function("BATCH.items.length === 1")
+        assert page.evaluate(rows) == [["color.png", "READY", 1]] and page.evaluate(zip_off)
+        before = page.evaluate("BATCH.job")
+        page.click("#side button:text-is('Convert')")                      # and a new batch starts afresh
+        page.wait_for_function("j => BATCH.job !== j && BATCH.status && BATCH.status.finished", arg=before, timeout=180000)
+        assert page.evaluate(rows) == [["color.png", "DONE", 2]] and names_in_the_zip() == ["color.svg"]
+        job = page.evaluate("BATCH.job")
+        for odd in (None, "0", 7, -1, 0.0, False):                               # nonsense about which picture changes nothing
+            assert _post(server + "/api/batch/forget", {"job": job, "i": odd})[0] == 200
+        assert _post(server + "/api/batch/forget", {"job": "no such batch", "i": 0})[0] == 200 and names_in_the_zip() == ["color.svg"]
+        assert not errs, errs
+        b.close()
+
+
 def test_batch_keeps_going_after_a_failure_and_can_stop(server, lineart, tmp_path):
     a = _upload(server, lineart)
     _, res = _start(server, [{"id": "nope", "name": "bad.png", "params": {}}, {"id": a, "name": "ok.png", "params": {}}],

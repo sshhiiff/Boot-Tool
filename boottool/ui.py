@@ -352,6 +352,12 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
                     if job:
                         job.stop.set()
                     return self._json(200, {"ok": True})
+                if self.path == "/api/batch/forget":            # a row taken off the list after its batch
+                    req = json.loads(body)
+                    job = engine.batches.get(str(req.get("job", "")))
+                    if job and type(req.get("i")) is int:           # (not true or false, which count as numbers)
+                        job.forget(req["i"])
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/trace":
                     req = json.loads(body)
                     res = engine.trace(req["id"], req.get("params", {}),

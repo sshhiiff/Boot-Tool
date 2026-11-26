@@ -612,13 +612,14 @@ const batchRunning = () => BATCH.job && BATCH.status && !BATCH.status.finished;
 function renderBatch() {
   const list = $("#batchList"); if (!list) return; const sc = list.scrollTop, st = BATCH.status, its = BATCH.items;
   const done = st ? st.counts.done : 0, err = st ? st.counts.error : 0, n = its.length;
-  const pct = st ? Math.round((done + err + (st.counts.stopped || 0)) / Math.max(1, st.items.length) * 100) : 0;
-  $("#batchHead").innerHTML = `<div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:var(--panel);border-bottom:1px solid #000"><div style="text-transform:uppercase;letter-spacing:.08em;font-size:15px">Batch · ${n} image${n === 1 ? "" : "s"}${BATCH.adding ? ` · adding ${BATCH.adding}…` : ""}</div><div style="flex:1;height:14px;border:1px solid #000;background:#fff"><div style="width:${pct}%;height:100%;background:var(--acc)"></div></div><div>${st ? `${done} of ${st.items.length} done${err ? ` · ${err} failed` : ""}` : "not started"}</div></div>`;
+  const inJob = st ? st.items.filter(s => !s.gone).length : 0;       // (pictures taken off the list since are not counted)
+  const pct = st ? Math.round((done + err + (st.counts.stopped || 0)) / Math.max(1, inJob) * 100) : 0;
+  $("#batchHead").innerHTML = `<div style="display:flex;align-items:center;gap:16px;padding:10px 14px;background:var(--panel);border-bottom:1px solid #000"><div style="text-transform:uppercase;letter-spacing:.08em;font-size:15px">Batch · ${n} image${n === 1 ? "" : "s"}${BATCH.adding ? ` · adding ${BATCH.adding}…` : ""}</div><div style="flex:1;height:14px;border:1px solid #000;background:#fff"><div style="width:${pct}%;height:100%;background:var(--acc)"></div></div><div>${st ? `${done} of ${inJob} done${err ? ` · ${err} failed` : ""}` : "not started"}</div></div>`;
   if (!n) { list.innerHTML = `<div class="empty" style="position:static;height:100%"><div class="boxd" id="bdrop"><b>DROP IMAGES HERE</b>or use Add images / Add folder on the left<br><span style="font-size:13px">PNG, JPG, GIF, WebP, BMP, TIFF</span></div></div>`; $("#bdrop").onclick = () => $("#addImgs").click(); }
   else {
     list.innerHTML = its.map((it, i) => {
-      const s = st && st.items[i] && st.items.length === its.length ? st.items[i] : null, state = s ? s.state : "ready";
-      const svg = state === "done" ? `<img src="/api/batch/svg?job=${BATCH.job}&i=${i}&t=${s.bytes}">` : `<div style="color:var(--mute);font-size:12px;text-align:center;padding-top:30px">—</div>`;
+      const s = st && it.j != null && st.items[it.j] || null, state = s ? s.state : "ready";   // it.j: which picture of the batch this row was (rows can be removed and added since)
+      const svg = state === "done" ? `<img src="/api/batch/svg?job=${BATCH.job}&i=${it.j}&t=${s.bytes}">` : `<div style="color:var(--mute);font-size:12px;text-align:center;padding-top:30px">—</div>`;
       const chip = {ready: ["READY", "var(--btn)", "#000"], queued: ["QUEUED", "var(--btn)", "#000"], working: ["CONVERTING…", "#fff", "#000"], done: [s && s.saved_as ? "SAVED" : "DONE", "var(--acc)", "#fff"], error: ["FAILED", "#fff", "#a00"], stopped: ["STOPPED", "var(--btn)", "#000"]}[state];
       const info = state === "done" ? `${s.path_count.toLocaleString()} paths · ${s.node_count.toLocaleString()} nodes · ${kb(s.bytes)}${s.saved_as && s.saved_as !== s.fname ? ` · saved as ${esc(s.saved_as)}` : ""}` : state === "error" ? `<span style="color:#a00">${esc(s.error || "failed")}</span>` : state === "working" ? "working on it…" : "";
       const custom = BATCH.per && it.own;
@@ -636,7 +637,12 @@ function renderBatch() {
 }
 function removeItem(i) {
   const it = BATCH.items[i]; if (it && it.url !== origURL) URL.revokeObjectURL(it.url);
-  BATCH.items.splice(i, 1); BATCH.status = null; BATCH.job = null;
+  BATCH.items.splice(i, 1);
+  const s = it && it.j != null && BATCH.status && BATCH.status.items[it.j];
+  if (s && !s.gone) {                                  // the other rows keep their results; this picture leaves the count and the .zip
+    s.gone = true; if (BATCH.status.counts[s.state] > 0) BATCH.status.counts[s.state]--;
+    fetch("/api/batch/forget", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({job: BATCH.job, i: it.j})}).catch(() => {});
+  }
   if (BATCH.sel === i) BATCH.sel = -1; else if (BATCH.sel > i) BATCH.sel--;
   bindConvert(); renderBatch(); if (BATCH.per) renderSide();
 }
@@ -688,9 +694,11 @@ function batchSaveBox() {
 async function startBatch() {
   try {
     const items = BATCH.items.map(it => ({id: it.id, name: it.name, params: BATCH.per && it.own ? it.own : SHARED}));
+    const sent = BATCH.items.slice();
     const r = await fetch("/api/batch/start", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({items, out_dir: BATCH.outDir.trim(), keep_going: BATCH.keepGoing})});
     const j = await r.json(); if (!r.ok) throw new Error(j.error);
     BATCH.job = j.job; BATCH.status = {finished: false, counts: {done: 0, error: 0, stopped: 0}, items: items.map(() => ({state: "queued"})), out_dir: j.out_dir};
+    BATCH.items.forEach(it => { delete it.j; }); sent.forEach((it, i) => { it.j = i; });   // each row remembers which picture of this batch it is
     renderBatch(); pollBatch();
   } catch (e) { toast(e.message); }
 }

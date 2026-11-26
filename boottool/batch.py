@@ -113,11 +113,17 @@ class Job:
             return None
         return self.dir / self.items[i]["fname"]
 
+    def forget(self, i: int) -> None:
+        """Picture i was taken off the list after the batch: it is left out of the .zip (its SVG in
+        the output folder, if one was chosen, stays where it is)."""
+        if 0 <= i < len(self.items):
+            self.items[i]["gone"] = True
+
     def zip_bytes(self) -> bytes:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             for it in self.items:
-                if it["state"] == "done":
+                if it["state"] == "done" and not it.get("gone"):
                     z.write(self.dir / it["fname"], it["fname"])
         return buf.getvalue()
 
