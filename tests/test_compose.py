@@ -421,6 +421,21 @@ def test_position_and_size_boxes(server):
         type_in("Width", 60 * k)
         assert page.evaluate(bounds) == [100, 80, 60, 45]                   # proportions kept, position kept
 
+        # dragged with the mouse: X and Y follow it, and a width typed afterwards leaves it where it was dropped
+        shown = "l => +[...document.querySelectorAll('.cell input')].findLast(i => (i.closest('label,div') || {}).textContent.trim() === l).value"
+        at = page.evaluate("""(() => { const r = document.querySelector('#ccanvas').getBoundingClientRect(),
+          v = paper.view.projectToView(Compose._api.getL().art.lastChild.bounds.center); return [r.left + v.x, r.top + v.y]; })()""")
+        page.mouse.move(*at)
+        page.mouse.down()
+        page.mouse.move(at[0] - 90, at[1] + 60, steps=6)                    # still held
+        x, y = page.evaluate("(() => { const b = Compose._api.getL().art.lastChild.bounds; return [b.x, b.y]; })()")
+        assert x < 95 and y > 85                                            # it has moved (from 100, 80)
+        assert [page.evaluate(shown, "X"), page.evaluate(shown, "Y")] == pytest.approx([x * k, y * k], abs=0.006)   # the boxes used to stay as they were
+        page.mouse.up()
+        dropped = page.evaluate(bounds)
+        type_in("Width", 30 * k)
+        assert page.evaluate(bounds) == dropped[:2] + [30, 22.5]            # used to jump back to where it was before the drag
+
         page.evaluate("""(() => { const A = Compose._api, L = A.getL(); L.art.removeChildren();
           const l = new paper.Path.Line({from: [20, 50], to: [120, 50], strokeColor: '#000', strokeWidth: 1}); L.art.addChild(l); A.commit(); A.select([l]); })()""")
         type_in("X", 30 * k)

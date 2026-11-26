@@ -103,6 +103,36 @@ def test_ink_names_with_special_characters_keep_the_files_valid():
     assert name.upper() in "".join(ok(pg.compose(job, 0)).itertext())
 
 
+def test_ink_names_with_special_characters_show_as_typed_in_the_plate_tabs(server, color):
+    """A name typed for an ink is shown as it was typed in the plate's tab (< and > in it used to be
+    taken for HTML there)."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    name = '<b>Red</b> 5" stripe & <trim>'
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.set_input_files("#file", str(color))
+        page.wait_for_function("imageId && lastShown", timeout=60000)
+        page.click('a[data-t="print"]')
+        page.wait_for_function("lastRes && lastRes.plates && lastRes.plates.length > 0", timeout=120000)
+        page.click("#side span:text-is('Spot colour')")                    # one box per ink, for its name
+        page.wait_for_function("lastRes.plates.length > 1 && document.querySelectorAll('.pal input[type=text]').length === lastRes.plates.length", timeout=120000)
+        others = page.evaluate("lastRes.plates.slice(1).map((p, i) => `${i + 2} ${p.name}`)")
+        page.locator(".pal input[type=text]").first.fill(name)
+        page.wait_for_function("n => lastRes.plates[0].name === n", arg=name, timeout=120000)
+        tabs = "[...document.querySelectorAll('#plateTabs div')]"
+        page.wait_for_function(f"n => {tabs}.some(d => d.textContent.includes(n))", arg="stripe", timeout=20000)
+        assert page.evaluate(f"{tabs}.map(d => d.textContent)") == ["All", "1 " + name] + others
+        assert page.evaluate("document.querySelectorAll('#plateTabs div *').length") == 0   # the name made no elements of its own
+        page.locator("#plateTabs div").nth(1).click()                      # and its tab opens that plate
+        page.wait_for_function(f"lastRes.view === 0 && plateView === 0 && {tabs}[1].className === 'on'", timeout=120000)   # Boot Tool sent that plate
+        assert not errs, errs
+        b.close()
+
+
 def test_separation_plates_layers_and_zip(color):
     job = sep.build(color, sep.SepParams(inks=3), pg.PageOpts())
     assert 1 <= len(job.plates) <= 3 and job.info["paper"]                         # paper never printed
