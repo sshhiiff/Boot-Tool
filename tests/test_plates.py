@@ -189,3 +189,101 @@ def test_endpoints_plates_and_download(server, color):
     assert code == 200 and h["Content-Type"] == "image/svg+xml" and b'fill="#000"' in s
     code, body, _ = _post(server + "/api/plates", {**req, "seq": 3, "tool": "halftone", "params": {"shape": "custom"}})
     assert code == 400 and "Draw a shape" in json.loads(body)["error"]
+
+
+_ON = "[...document.querySelectorAll('#side .seg span.on')].map(s => s.textContent)"
+_SLIDER = "[...document.querySelectorAll('#side .lab')].some(s => s.textContent === 'Number of inks')"
+
+
+def _pick_inks_in_print(page, server, picture):
+    """Open the picture, go to Print with Spot colour, and switch to "Pick from image"."""
+    page.goto(server + "/")
+    page.set_input_files("#file", str(picture))
+    page.wait_for_function("imageId && lastShown", timeout=60000)
+    page.click('a[data-t="print"]')
+    page.wait_for_function("lastRes && lastRes.plates && lastRes.plates.length > 0", timeout=120000)
+    page.click("#side span:text-is('Spot colour')")
+    page.wait_for_function("lastRes.plates.length > 1 && document.querySelectorAll('.pal input[type=text]').length === lastRes.plates.length", timeout=120000)
+    assert "Automatic" in page.evaluate(_ON) and page.evaluate(_SLIDER)
+    page.click("#side span:text-is('Pick from image')")
+    page.wait_for_function("P.print.picked && P.print.colors.length === lastRes.plates.length")
+    assert "Pick from image" in page.evaluate(_ON) and not page.evaluate(_SLIDER)
+
+
+def test_opening_another_picture_goes_back_to_automatic_inks(server, color, lineart):
+    """Inks picked from a picture belong to that picture. Opening another one used to forget the
+    colours but leave "Pick from image" switched on: the inks were chosen automatically while the
+    panel said otherwise, and "Number of inks" was gone."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        _pick_inks_in_print(page, server, color)
+        view = page.evaluate("mode")
+        page.locator(".pal .eye[title^='Pick this ink']").nth(1).click()   # and the eyedropper is out, for the second ink
+        page.wait_for_function("EYE.on && document.querySelector('#vp').classList.contains('eyeing')")
+        first = page.evaluate("imageId")
+
+        page.set_input_files("#file", str(lineart))                        # another picture
+        page.wait_for_function("f => imageId !== f && lastRes && lastRes.plates.length > 0", arg=first, timeout=120000)
+        assert page.evaluate("[P.print.picked, P.print.colors]") == [False, []]
+        assert "Automatic" in page.evaluate(_ON) and "Pick from image" not in page.evaluate(_ON)
+        assert page.evaluate(_SLIDER)                                      # "Number of inks" is back
+        assert page.evaluate("document.querySelectorAll('.pal .eye[title=\"Remove this ink\"]').length") == 0
+        assert page.evaluate("[EYE.on, document.querySelector('#vp').classList.contains('eyeing')]") == [False, False]
+        assert page.evaluate("mode") == view                               # and the view is the one from before the eyedropper
+        assert not errs, errs
+        b.close()
+
+
+def test_a_picture_from_the_batch_list_starts_afresh_in_print(server, color, lineart, tmp_path):
+    """Opening a picture from the Batch list is opening another picture too. It used to be printed
+    with the inks picked from the picture before, and with that picture's Levels and histogram.
+    Looking at the same picture again keeps what was set for it."""
+    import numpy as np
+    from PIL import Image
+    sync_api = pytest.importorskip("playwright.sync_api")
+    soft = tmp_path / "soft.png"                                           # the line art with little contrast: its Levels are far from the line art's
+    Image.fromarray((90 + np.asarray(Image.open(lineart).convert("L")) * (80 / 255)).astype(np.uint8)).save(soft)
+    auto = [json.loads(_post(server + "/api/upload", f.read_bytes(), "application/octet-stream")[1])["auto"] for f in (lineart, soft)]
+    assert abs(auto[0][0] - auto[1][0]) > 50 and abs(auto[0][2] - auto[1][2]) > 50
+    levels = "[P.print.lv_black, P.print.lv_gamma, P.print.lv_white]"
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        _pick_inks_in_print(page, server, color)
+        picked = page.evaluate("P.print.colors")
+        assert len(picked) > 1
+
+        def from_the_batch_list(i):
+            page.evaluate("i => viewItem(i)", i)
+            page.wait_for_function("i => imageId === BATCH.items[i].id && lastRes && lastRes.plates && lastRes.plates.length > 0", arg=i, timeout=120000)
+
+        page.click('a[data-t="convert"]')
+        page.click("#toolbar [data-m=batch]")
+        page.set_input_files("#side input[type=file][multiple]:not([webkitdirectory])", [str(lineart), str(soft)])   # "Add images"
+        page.wait_for_function("BATCH.items.length === 2 && !BATCH.adding", timeout=60000)
+        page.evaluate("viewItem(0)")
+        page.wait_for_function("imageId === BATCH.items[0].id && lastShown", timeout=60000)
+        page.click('a[data-t="print"]')
+        page.wait_for_function("lastRes && lastRes.plates && lastRes.plates.length > 0", timeout=120000)
+        assert page.evaluate("[P.print.picked, P.print.colors]") == [False, []]   # used to be the first picture's inks
+        assert "Automatic" in page.evaluate(_ON) and page.evaluate(_SLIDER)
+        assert page.evaluate(levels) == auto[0] == page.evaluate("IMG.auto")       # and its own Levels, with its own histogram
+
+        page.click("#side span:text-is('Pick from image')")               # inks picked for this picture, and Levels moved...
+        page.wait_for_function("P.print.picked && P.print.colors.length === lastRes.plates.length")
+        own = page.evaluate("P.print.colors")
+        page.evaluate("P.print.lv_gamma = 1.7")
+        from_the_batch_list(0)                                             # ...are still there when it is looked at again
+        assert page.evaluate("[P.print.picked, P.print.colors, P.print.lv_gamma]") == [True, own, 1.7] and own != picked
+
+        from_the_batch_list(1)                                             # the next picture starts afresh again
+        assert page.evaluate("[P.print.picked, P.print.colors]") == [False, []]
+        assert page.evaluate(levels) == auto[1] == page.evaluate("IMG.auto")
+        assert not errs, errs
+        b.close()

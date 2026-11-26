@@ -595,17 +595,22 @@ async function addFiles(files) {
   for (const f of files) {
     try {
       const r = await fetch("/api/upload", {method: "POST", body: f}), j = await r.json(); if (!r.ok) throw new Error(j.error);
-      BATCH.items.push({id: j.id, name: f.name, w: j.width, h: j.height, url: URL.createObjectURL(f), own: null});
+      BATCH.items.push({id: j.id, name: f.name, w: j.width, h: j.height, url: URL.createObjectURL(f), own: null, img: {hist: j.hist || null, auto: j.auto || [0, 1, 255], tonal: !!j.tonal}});
     } catch (e) { bad++; }
     BATCH.adding--; renderBatch();
   }
   if (bad) toast(`${bad} file${bad > 1 ? "s" : ""} could not be read as images and were skipped.`);
 }
+let inksFor = "";                                     // the picture that Print's inks and Levels were last set up for
 function viewItem(i) {
   const it = BATCH.items[i]; if (!it) return;
   BATCH.sel = i; bindConvert(); imageId = it.id; natW = it.w; natH = it.h; fileName = it.name.replace(/\.[^.]+$/, ""); lastRes = null; stageKey = "";
   ownUrl = false; origURL = it.url; $("#orig").src = it.url;
   setName(fileName, `· ${it.w}×${it.h}`); $("#empty").style.display = "none"; $("#stage").style.display = "block";
+  if (it.id !== inksFor) {                             // another picture: Print starts afresh for it, as in load
+    inksFor = it.id; const o = P.print; o.colors = []; o.names = []; o.angles_s = []; o.picked = false; eyeOff();
+    if (it.img) { IMG = it.img; [o.lv_black, o.lv_gamma, o.lv_white] = IMG.tonal ? IMG.auto : [0, 1, 255]; }   // its own Levels and histogram
+  }
   setMode("svg"); renderSide(); run();
 }
 const batchRunning = () => BATCH.job && BATCH.status && !BATCH.status.finished;
@@ -918,6 +923,7 @@ async function load(file, to) {
     const r = await fetch("/api/upload", {method: "POST", body: file}), j = await r.json(); if (!r.ok) throw new Error(j.error);
     IMG = {hist: j.hist || null, auto: j.auto || [0, 1, 255], tonal: !!j.tonal};
     const lv = IMG.tonal ? IMG.auto : [0, 1, 255]; [P.print.lv_black, P.print.lv_gamma, P.print.lv_white] = lv; P.print.colors = []; P.print.names = []; P.print.angles_s = [];
+    P.print.picked = false; eyeOff(); inksFor = j.id;                         // picked inks belong to the picture they were picked from
     BATCH.sel = -1; bindConvert();
     libName = ""; imageId = j.id; natW = j.width; natH = j.height; fileName = file.name.replace(/\.[^.]+$/, ""); lastRes = null; lastPalette = []; plateView = "all"; stageKey = "";
     if (origURL && ownUrl) URL.revokeObjectURL(origURL); origURL = URL.createObjectURL(file); ownUrl = true; $("#orig").src = origURL;
