@@ -11,6 +11,7 @@ import json
 import os
 import queue
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,29 @@ def _request(url: str, data=None, ctype="application/json"):
     req = urllib.request.Request(url, data=data, headers={"Content-Type": ctype} if data is not None else {})
     with urllib.request.urlopen(req, timeout=180) as r:
         return r.status, r.read()
+
+
+def _font(path: str) -> None:
+    """A small font of our own (the letter A and a space), so that turning text into outlines is
+    tried on every machine, also one without any fonts."""
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.ttGlyphPen import TTGlyphPen
+    fb = FontBuilder(1000, isTTF=True)
+    fb.setupGlyphOrder([".notdef", "A", "space"])
+    fb.setupCharacterMap({65: "A", 32: "space"})
+    pen = TTGlyphPen(None)
+    pen.moveTo((100, 0))
+    pen.lineTo((100, 700))
+    pen.lineTo((500, 700))
+    pen.lineTo((500, 0))
+    pen.closePath()
+    fb.setupGlyf({".notdef": TTGlyphPen(None).glyph(), "A": pen.glyph(), "space": TTGlyphPen(None).glyph()})
+    fb.setupHorizontalMetrics({".notdef": (500, 0), "A": (600, 100), "space": (300, 0)})
+    fb.setupHorizontalHeader(ascent=800, descent=-200)
+    fb.setupNameTable({"familyName": "Boot Tool Smoke Test", "styleName": "Regular"})
+    fb.setupOS2(sTypoAscender=800, sTypoDescender=-200)
+    fb.setupPost()
+    fb.save(path)
 
 
 def _picture() -> bytes:
@@ -40,9 +64,17 @@ def main(exe: str) -> None:
     if os.name == "nt" and not exe.lower().endswith(".exe"):
         exe += ".exe"
     home = tempfile.mkdtemp(prefix="boottool-smoke-")
-    env = {**os.environ, "BROWSER": "no-browser-during-tests",            # never open a real browser
-           "BOOTTOOL_LIBRARY": os.path.join(home, "Library"), "BOOTTOOL_PRINTS": os.path.join(home, "Prints")}
-    proc = subprocess.Popen([exe], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    try:
+        os.mkdir(os.path.join(home, "Fonts"))
+        _font(os.path.join(home, "Fonts", "BootToolSmokeTest.ttf"))
+        env = {**os.environ, "BOOTTOOL_LIBRARY": os.path.join(home, "Library"), "BOOTTOOL_PRINTS": os.path.join(home, "Prints"),
+               "BOOTTOOL_FONTS": os.path.join(home, "Fonts")}               # only our own font: the same on every machine
+        # --no-browser: the app must not open a browser here. (A made-up BROWSER name does not do it:
+        # Python then goes on to the desktop's own way of opening a page.)
+        proc = subprocess.Popen([exe, "--no-browser"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    except BaseException:
+        shutil.rmtree(home, ignore_errors=True)
+        raise
     lines: queue.Queue = queue.Queue()
     threading.Thread(target=lambda: [lines.put(line) for line in proc.stdout], daemon=True).start()
     try:
@@ -79,10 +111,10 @@ def main(exe: str) -> None:
             print("print", params["method"], "->", [p["name"] for p in res["plates"]])
 
         fonts = json.loads(_request(url + "api/fonts")[1])["fonts"]
-        if fonts:
-            out = json.loads(_request(url + "api/text", json.dumps({"font": fonts[0]["id"], "text": "Boot", "size": 20}).encode())[1])
-            assert out["d"].startswith("M"), "text was not turned into outlines"
-        print("fonts:", len(fonts), "found; text outlines work" if fonts else "found (text not checked)")
+        assert [f["family"] for f in fonts] == ["Boot Tool Smoke Test"], f"the app did not find the test font (it lists {fonts})"
+        out = json.loads(_request(url + "api/text", json.dumps({"font": fonts[0]["id"], "text": "A A", "size": 20}).encode())[1])
+        assert out["d"].startswith("M") and out["d"].count("M") == 2, "text was not turned into outlines"
+        print("fonts: the test font is found; text outlines work")
         print("SMOKE TEST PASSED")
     finally:
         proc.terminate()
@@ -90,6 +122,7 @@ def main(exe: str) -> None:
             proc.wait(timeout=30)
         except subprocess.TimeoutExpired:
             proc.kill()
+        shutil.rmtree(home, ignore_errors=True)
 
 
 if __name__ == "__main__":
