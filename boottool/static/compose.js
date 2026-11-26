@@ -1093,6 +1093,7 @@ const Compose = (() => {
       const ppi = Math.min(300, Math.sqrt(25e6 / (S.W * S.H)) * 25.4), nm = (typeof fileName === "string" && fileName ? fileName : "composition");
       const n = Math.min(10, Math.max(1, colourSets(vis).f.filter(x => x[0]).length));
       PG.size = "Custom"; PG.custom_w = num(S.W + 2 * PG.margin, 1); PG.custom_h = num(S.H + 2 * PG.margin, 1);
+      PG.art_w = 0; grownFrom = null;                    // the page is printed as it was laid out here, not at a size set for an earlier picture
       P.print.colors = []; P.print.names = []; P.print.picked = false; P.print.keep_solid = false;
       const blob = await renderPng(ppi, () => false);
       Object.assign(P.print, {method: "spot", kind: "flat", inks: n});

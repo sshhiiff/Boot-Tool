@@ -767,9 +767,21 @@ const printParams = () => { const {angles_c, angles_s, ...r} = P.print; return {
 const PAGE_MM = {A5: [148, 210], A4: [210, 297], A3: [297, 420]};
 function pageDims() { if (PG.size === "Custom") return [PG.custom_w, PG.custom_h]; const [w, h] = PAGE_MM[PG.size] || PAGE_MM.A4; return PG.orientation === "landscape" ? [h, w] : [w, h]; }
 const artRatio = () => lastRes && lastRes.art ? lastRes.art[3] / lastRes.art[2] : (natW ? natH / natW : 1);
+let grownFrom = null;                     // the page that was chosen ({size, orientation, w, h}), while a set size has made it a bigger Custom one
 function growPage() {                     // a design bigger than the page makes the page a Custom size that fits it
-  const w = PG.art_w, h = w * artRatio(), [pw, ph] = pageDims(), nw = Math.ceil(w + 2 * PG.margin), nh = Math.ceil(h + 2 * PG.margin);
-  if (nw > pw || nh > ph) { PG.size = "Custom"; PG.custom_w = Math.min(2000, Math.max(pw, nw)); PG.custom_h = Math.min(2000, Math.max(ph, nh)); }
+  if (PG.size !== "Custom") grownFrom = null;                              // a page picked from the list is the page that was chosen
+  const [pw, ph] = grownFrom ? [grownFrom.w, grownFrom.h] : pageDims();    // (so is a page laid out in Compose, until it has to grow)
+  const w = PG.art_w, h = w * artRatio(), nw = Math.ceil(w + 2 * PG.margin), nh = Math.ceil(h + 2 * PG.margin);
+  if (nw > pw || nh > ph) {
+    if (!grownFrom) grownFrom = {size: PG.size, orientation: PG.orientation, w: pw, h: ph};
+    PG.size = "Custom"; PG.custom_w = Math.min(2000, Math.max(pw, nw)); PG.custom_h = Math.min(2000, Math.max(ph, nh));
+  } else shrinkPage();
+}
+function shrinkPage() {                   // back to the page that was chosen
+  if (!grownFrom) return;
+  PG.size = grownFrom.size; PG.orientation = grownFrom.orientation;
+  if (grownFrom.size === "Custom") { PG.custom_w = grownFrom.w; PG.custom_h = grownFrom.h; }
+  grownFrom = null;
 }
 function designSizeBox() {
   return {build: () => {
@@ -942,6 +954,11 @@ function payload(my) {
 async function run() {
   if (!imageId || tool === "help" || tool === "compose" || tool === "simulate") return;
   syncDraft();
+  if (tool !== "convert") {                             // a set size has to fit the page still, after another page size or another picture
+    const page = () => PG.size === "Custom" ? `${PG.custom_w}×${PG.custom_h} mm` : PG.size, was = page();
+    if (PG.art_w > 0) growPage(); else shrinkPage();    // (and a page made bigger for a set size is not kept when it is no longer needed)
+    if (page() !== was) { renderSide(); toast(grownFrom ? "The page was made bigger, to fit the design at the size you set." : `The design fits the page you chose again, so the page is ${page()}.`); }
+  }
   const my = ++seq; if (ctrl) ctrl.abort(); ctrl = new AbortController(); $("#busy").style.display = "block";
   const t0 = tool;
   try {
