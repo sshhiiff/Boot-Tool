@@ -86,6 +86,47 @@ def test_batch_keeps_going_after_a_failure_and_can_stop(server, lineart, tmp_pat
     assert _post(server + "/api/batch/stop", {"job": res["job"]})[0] == 200
 
 
+def test_a_status_check_that_fails_does_not_leave_the_batch_view_stuck(server, lineart, color):
+    """The page asks how a batch is getting on every half second or so. If one of those questions got
+    no answer, it stopped asking: the list stayed on "queued" and Convert and Clear list stayed
+    greyed out until the page was reloaded, though the batch had long finished."""
+    sync_api = pytest.importorskip("playwright.sync_api")
+    buttons = "Object.fromEntries([...document.querySelectorAll('#side button')].map(b => [b.textContent, !b.disabled]))"
+    with sync_api.sync_playwright() as p:
+        b = p.chromium.launch()
+        page = b.new_page(viewport={"width": 1400, "height": 900})
+        errs = []
+        page.on("pageerror", lambda e: errs.append(str(e)))
+        page.goto(server + "/")
+        page.wait_for_function("document.querySelector('#ver').textContent.length > 1")
+        page.click("#toolbar [data-m=batch]")
+        page.set_input_files("#side input[type=file][multiple]:not([webkitdirectory])", [str(lineart), str(color)])
+        page.wait_for_function("BATCH.items.length === 2 && !BATCH.adding", timeout=60000)
+
+        asked = []
+        page.route("**/api/batch/status*", lambda route: (asked.append(1), route.abort() if len(asked) in (1, 2) else route.continue_()))
+        page.click("#side button:text-is('Convert')")                      # the first two questions get no answer
+        page.wait_for_function("BATCH.status && BATCH.status.finished", timeout=60000)
+        assert len(asked) >= 3 and page.evaluate("BATCH.status.counts.done") == 2
+        assert page.evaluate(buttons) == {"Convert": True, "Download .zip of the SVGs": True, "Stop": False, "Clear list": True}
+        page.unroute("**/api/batch/status*")
+
+        page.route("**/api/batch/status*", lambda route: route.abort())      # no answer ever again (Boot Tool was closed), and the
+        page.evaluate("BATCH.status.finished = false; pollBatch(25)")       # page has asked for a quarter of a minute: it gives up
+        page.wait_for_function("/stopped answering/.test(document.querySelector('#toast').textContent)", timeout=60000)
+        assert page.evaluate("[BATCH.job, BATCH.status]") == [None, None]
+        assert page.evaluate(buttons) == {"Convert": True, "Download .zip of the SVGs": False, "Stop": False, "Clear list": True}
+        page.unroute("**/api/batch/status*")
+
+        page.route("**/api/batch/status*", lambda route: route.fulfill(status=404, content_type="application/json", body='{"error": "unknown batch; run it again"}'))
+        page.click("#side button:text-is('Convert')")                      # Boot Tool has forgotten the batch (it was restarted, say)
+        page.wait_for_function("/unknown batch/.test(document.querySelector('#toast').textContent)", timeout=60000)
+        assert page.evaluate("[BATCH.job, BATCH.status]") == [None, None]
+        assert page.evaluate(buttons) == {"Convert": True, "Download .zip of the SVGs": False, "Stop": False, "Clear list": True}
+        assert not errs, errs
+        b.close()
+
+
 def test_batch_rejects_bad_requests(server, lineart, tmp_path):
     a = _upload(server, lineart)
     assert _start(server, [])[0] == 400

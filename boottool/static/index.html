@@ -694,15 +694,19 @@ async function startBatch() {
     renderBatch(); pollBatch();
   } catch (e) { toast(e.message); }
 }
-function pollBatch() {
+function pollBatch(missed = 0) {
   clearTimeout(BATCH.poll);
   BATCH.poll = setTimeout(async () => {
     try {
-      const r = await fetch(`/api/batch/status?job=${BATCH.job}`), j = await r.json(); if (!r.ok) throw new Error(j.error);
+      const r = await fetch(`/api/batch/status?job=${BATCH.job}`), j = await r.json(); if (!r.ok) throw Object.assign(new Error(j.error), {said: true});
       BATCH.status = j; renderBatch();
       if (!j.finished) pollBatch();
       else { const c = j.counts; toast(`${c.done} converted${c.error ? `, ${c.error} failed` : ""}${c.stopped ? `, ${c.stopped} stopped` : ""}${j.out_dir ? `. Saved in ${j.out_dir}` : ". Download the .zip to keep them."}`); }
-    } catch (e) { toast(e.message); }
+    } catch (e) {
+      if (!e.said && missed < 25) return pollBatch(missed + 1);        // one answer that did not come is not the end of the batch: ask again, for a quarter of a minute
+      BATCH.status = null; BATCH.job = null; renderBatch();             // nothing more will be heard of this batch: the buttons work again
+      toast(e.said ? e.message : "Boot Tool stopped answering, so this batch cannot be followed any further. Check that it is still running, then convert again.");
+    }
   }, 600);
 }
 async function stopBatch() { if (!BATCH.job) return; try { await fetch("/api/batch/stop", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({job: BATCH.job})}); } catch (e) {} }
