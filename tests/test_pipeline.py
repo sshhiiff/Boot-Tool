@@ -37,6 +37,28 @@ def test_color(color):
     assert res.scores["ssim_target"] >= 0.90
 
 
+def test_more_colours_than_256_are_not_mixed_up(tmp_path):
+    """`--colors 300` used to give 300 colours numbers that only go up to 255: the last 44 were
+    counted from 0 again, and their parts of the picture came out in other colours' colours."""
+    import re
+    import numpy as np
+    from PIL import Image
+    from boottool.preprocess import prepare
+    blocks = np.random.default_rng(0).integers(0, 256, (20, 20, 3), dtype=np.uint8)       # 400 different flat colours
+    picture = np.kron(blocks, np.ones((48, 48, 1), dtype=np.uint8))                       # 960 x 960: traced at its own size
+    Image.fromarray(picture).save(tmp_path / "many.png")
+    for asked in (256, 300):
+        prep = prepare(tmp_path / "many.png", Params(mode="color", colors=asked, denoise=False))
+        assert 250 <= len(prep.palette) <= 256
+        traced = np.asarray(prep.palette)[prep.labels].astype(int)                         # every pixel in the colour it was given
+        off = np.abs(traced - picture.astype(int)).max(axis=2)
+        assert np.percentile(off, 99) < 60 and off.mean() < 12, asked                      # (400 colours in 256: each near its own)
+    out = tmp_path / "many.svg"                                                            # and the command line takes "300" without a fuss
+    res = CliRunner().invoke(main, ["trace", str(tmp_path / "many.png"), str(out), "--mode", "color", "--colors", "300"])
+    assert res.exit_code == 0, res.output
+    assert 200 < len(set(re.findall(r'fill="(#[0-9a-f]{6})"', out.read_text()))) <= 256
+
+
 def test_no_corner_overshoot(lineart):
     """Regression: curve handles used to spike past corners. SSIM is too coarse to see it,
     so check the rendered ink never extends beyond the source ink's bounding box."""

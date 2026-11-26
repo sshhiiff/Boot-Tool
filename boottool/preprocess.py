@@ -158,7 +158,7 @@ def _prep_color(rgb: np.ndarray, p: Params, scale: float) -> Prepared:
     rng = np.random.default_rng(0)
     idx = rng.choice(len(lab), size=min(len(lab), 60000), replace=False)
     sample = lab[idx]
-    k = max(2, min(p.colors, len(np.unique(sample, axis=0))))
+    k = max(2, min(p.colors, 256, len(np.unique(sample, axis=0))))        # 256 at most: each pixel's colour is kept as one byte
 
     cv2.setRNGSeed(0)
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 1.0)
