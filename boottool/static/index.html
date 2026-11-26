@@ -46,6 +46,7 @@ input[type=range]::-moz-range-thumb{width:13px;height:13px;background:var(--acc)
 .cells{display:flex;border-top:1px solid #000}
 .cells span{flex:1;text-align:center;padding:7px 2px;border-left:1px solid #000;text-transform:uppercase;font-size:14px;background:var(--btn);cursor:pointer;user-select:none}
 .cells span:first-child{border-left:0}
+.nav a:focus-visible,.tool>div:focus-visible,.tool>span>div:focus-visible,.seg>span:focus-visible,.cells>span:focus-visible{outline:3px solid #ec008c;outline-offset:-3px;box-shadow:inset 0 0 0 5px #fff}
 .cells.wrap{flex-wrap:wrap}.cells.wrap span{flex:1 0 25%;border-top:1px solid #000;border-left:0;border-right:1px solid #000;margin-right:-1px}.cells.wrap span:nth-child(-n+4){border-top:0}
 .cells span.on{background:var(--acc);color:#fff}
 .chk{display:flex;gap:9px;align-items:center;margin:3px 0;cursor:pointer}
@@ -903,6 +904,45 @@ function renderTabs() {
   const mk = (v, l) => { const d = el("div", plateView === v ? "on" : "", l); d.onclick = () => { plateView = v; renderTabs(); run(); }; w.append(d); };
   mk("all", "All"); lastRes.plates.forEach((p, i) => mk(i, `${i + 1} ${esc(p.name)}`));
 }
+
+// ---------------------------------------------------------------- keyboard
+// The tabs, the view buttons and the choices in the panel (Light | Dark, A5 | A4 | A3 ...) are not real buttons, so
+// they could only be clicked. Here they are put in the Tab order, and Enter or Space presses the one that has the focus.
+// Choosing one usually redraws its panel: the focus is then put back on the same choice, so one can go on from there.
+// All of this is for the keyboard only. A click with the mouse leaves the focus where it always was (nowhere), so
+// nothing changes for the mouse: Space still pans in Compose, the arrow keys still nudge, the panel does not jump.
+const CHOICES = "#nav a, #toolbar > div[data-m], #plateTabs > div, .seg > span, .cells > span";
+const choicesIn = box => [...box.querySelectorAll(CHOICES)].filter(e => e.offsetParent !== null);
+let keyed = false, held = null;                       // the focus is being moved with Tab; the choice that has it: {el, box, at, text}
+function reachable(root) {
+  if (!root.querySelectorAll) return;
+  for (const e of [...(root.matches(CHOICES) ? [root] : []), ...root.querySelectorAll(CHOICES)]) {
+    if (!e.hasAttribute("tabindex")) { e.tabIndex = 0; e.setAttribute("role", "button"); }
+    e.setAttribute("aria-pressed", e.classList.contains("on"));      // (for screen readers: which one is chosen)
+  }
+}
+new MutationObserver(changes => {
+  for (const c of changes) { if (c.type === "attributes") reachable(c.target); else for (const n of c.addedNodes) reachable(n); }
+  if (!held || document.contains(held.el) || (document.activeElement && document.activeElement !== document.body)) return;
+  const now = choicesIn(held.box), same = now[held.at] && now[held.at].textContent === held.text ? now[held.at] : now.find(e => e.textContent === held.text);
+  if (same) same.focus({preventScroll: true}); else held = null;   // (the panel stays where it was scrolled to)
+}).observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ["class"]});
+reachable(document.body);
+document.addEventListener("keydown", e => { if (e.key === "Tab") keyed = true; }, true);
+document.addEventListener("pointerdown", () => { keyed = false; held = null; }, true);
+document.addEventListener("pointerup", () => {        // a click with the mouse does not keep the focus (nor does a press that is dragged away)
+  const a = document.activeElement;
+  if (!keyed && a && a.matches && a.matches(CHOICES)) a.blur();
+}, true);
+document.addEventListener("focusin", e => {
+  const t = e.target, box = keyed && t.matches && t.matches(CHOICES) ? t.closest("#side, #nav, #toolbar") : null;
+  held = box ? {el: t, box, at: choicesIn(box).indexOf(t), text: t.textContent} : null;
+});
+document.addEventListener("keydown", e => {
+  const t = e.target;
+  if (!keyed || (e.key !== "Enter" && e.key !== " ") || e.ctrlKey || e.metaKey || e.altKey || !t.matches || !t.matches(CHOICES)) return;
+  e.preventDefault(); t.click();
+});
 
 // ---------------------------------------------------------------- loading + running
 $("#open").onclick = $("#drop").onclick = () => $("#file").click();
