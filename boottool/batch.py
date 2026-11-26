@@ -146,5 +146,48 @@ def start(engine, req: dict, coerce) -> Job:
     while len(engine.batches) > 4:                         # keep only the latest few
         engine.batches.pop(next(iter(engine.batches)))
     job.thread = threading.Thread(target=job.run, args=(dict(engine.files), coerce), daemon=True)
+    with _LIVE_LOCK:                                       # (listed before it starts, so that closing can't miss it)
+        _LIVE.difference_update([j for j in _LIVE if j.finished])
+        _LIVE.add(job)
     job.thread.start()
     return job
+
+
+_LIVE: set = set()                                         # batches that may still be running (also ones no longer listed)
+_LIVE_LOCK = threading.Lock()
+
+
+def _say(text: str) -> None:
+    """Tell whoever is at the terminal, if there still is one: with its window closed, printing fails,
+    and that must not stop what comes next."""
+    try:
+        print(text, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
+def stop_all(root: Path, wait: float = 60.0) -> bool:
+    """Stop every batch still running in the session folder `root`, and wait until each has finished
+    the picture it has in hand: for at most `wait` seconds in all, and Ctrl+C ends the wait (on
+    Windows only once the picture in hand is done or the time is up). True if none is running any
+    more.
+
+    For closing Boot Tool: the session folder is deleted then, and a batch still writing into it
+    could keep it from going, or be cut off halfway through an SVG in its output folder."""
+    with _LIVE_LOCK:
+        busy = [j for j in _LIVE if j.dir.parent == root and not j.finished]
+    for j in busy:
+        j.stop.set()
+    if busy:
+        _say("Finishing the picture the batch is working on (a minute at most)... Ctrl+C again to stop sooner.")
+    try:
+        end = time.monotonic() + wait
+        for j in busy:
+            if j.thread.is_alive():
+                j.thread.join(max(0.0, end - time.monotonic()))
+    except KeyboardInterrupt:
+        pass
+    done = all(j.finished for j in busy)                   # (not is_alive(): a join that Ctrl+C broke off can leave that wrong)
+    if not done:
+        _say("It was not finished in time: that picture was not saved.")
+    return done

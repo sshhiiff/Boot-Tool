@@ -365,9 +365,14 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
 
     class Server(ThreadingHTTPServer):
         def server_close(self):
-            """Also delete this session's temporary folder (uploaded images, batch results)."""
+            """Also delete this session's temporary folder (uploaded images, batch results). A batch
+            that is still running is stopped first, and the picture it has in hand finished: so that
+            nothing is being written into the folder while it is deleted."""
             super().server_close()
-            shutil.rmtree(engine.dir, ignore_errors=True)
+            try:
+                bt.stop_all(engine.dir)
+            finally:                                        # whatever happens while waiting, the folder goes
+                shutil.rmtree(engine.dir, ignore_errors=True)
 
     return Server((host, port), Handler)
 

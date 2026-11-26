@@ -108,3 +108,146 @@ def test_only_this_computers_own_page_may_use_the_api(server, lineart):
     with pytest.raises(urllib.error.HTTPError) as e:
         urllib.request.urlopen(req)
     assert e.value.code == 403
+
+
+@pytest.mark.parametrize("terminal", ["there", "gone"])
+def test_closing_boot_tool_during_a_batch_lets_the_picture_in_hand_finish(lineart, tmp_path, monkeypatch, terminal):
+    """Closing Boot Tool deletes its session folder. A batch that was still running went on writing
+    into that folder while it was deleted (which could leave the folder behind), and could be cut
+    off halfway through an SVG in its output folder. The batch is stopped first now and the picture
+    it has in hand finished: that one is saved whole, the rest are not started, and the folder goes.
+    A batch in another Boot Tool is left alone. And it is the same when Boot Tool is closed by
+    closing its terminal window, so that there is nowhere left to print to."""
+    import threading
+
+    from boottool import batch as bt
+    from boottool.ui import make_server
+
+    real_pipeline, real_run, jobs = bt.run_pipeline, bt.Job.run, []
+
+    def slow(path, params, score=False):                                    # every picture takes two seconds
+        time.sleep(2.0)
+        return real_pipeline(path, params, score=score)
+    monkeypatch.setattr(bt, "run_pipeline", slow)
+    monkeypatch.setattr(bt.Job, "run", lambda self, *a: (jobs.append(self), real_run(self, *a))[1])
+    if terminal == "gone":
+        def no_terminal(*a, **kw):
+            raise OSError(5, "Input/output error")
+        monkeypatch.setattr(bt, "print", no_terminal, raising=False)
+
+    servers = [make_server("127.0.0.1", 0) for _ in range(2)]
+    for srv in servers:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+    one, other = (f"http://127.0.0.1:{srv.server_address[1]}" for srv in servers)
+    try:
+        code, there = _start(other, [{"id": _upload(other, lineart), "name": f"o{i}.png", "params": {}} for i in range(2)])
+        assert code == 200
+        out = tmp_path / "out"
+        image = _upload(one, lineart)
+        code, here = _start(one, [{"id": image, "name": f"p{i}.png", "params": {}} for i in range(4)], out_dir=str(out))
+        assert code == 200
+        for _ in range(600):                                                # until both batches are at work on their first picture
+            if len(jobs) == 2 and all(j.items[0]["state"] == "working" for j in jobs):   # (it takes two seconds; closing, below,
+                break                                                       # takes half a second at most to begin)
+            time.sleep(0.05)
+        assert len(jobs) == 2
+        job = next(j for j in jobs if j.id == here["job"])
+        folder = job.dir.parent
+        assert folder.is_dir()
+
+        servers[0].shutdown()
+        servers[0].server_close()                                           # Boot Tool is closed
+
+        assert not job.thread.is_alive() and job.finished
+        assert [it["state"] for it in job.items] == ["done", "stopped", "stopped", "stopped"]
+        assert [p.name for p in out.iterdir()] == ["p0.svg"]
+        assert (out / "p0.svg").read_text(encoding="utf-8").rstrip().endswith("</svg>")
+        assert not folder.exists()
+        st = _wait(other, there["job"])                                     # the other Boot Tool's batch runs on to its end
+        assert st["counts"]["done"] == 2
+    finally:
+        for srv in servers:                                                 # (closing the first again does no harm)
+            srv.shutdown()
+            srv.server_close()
+
+
+def test_a_picture_that_takes_too_long_is_not_waited_for_for_ever(lineart, tmp_path, monkeypatch, capsys):
+    """The wait for the picture in hand has an end. When the time is up, closing goes ahead, and
+    says that this picture was not saved."""
+    import threading
+
+    from boottool import batch as bt
+    from boottool.ui import make_server
+
+    real_pipeline, real_run, jobs, at_work = bt.run_pipeline, bt.Job.run, [], threading.Event()
+
+    def slow(path, params, score=False):
+        at_work.set()
+        time.sleep(1.5)
+        return real_pipeline(path, params, score=score)
+    monkeypatch.setattr(bt, "run_pipeline", slow)
+    monkeypatch.setattr(bt.Job, "run", lambda self, *a: (jobs.append(self), real_run(self, *a))[1])
+    srv = make_server("127.0.0.1", 0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        code, res = _start(url, [{"id": _upload(url, lineart), "name": f"p{i}.png", "params": {}} for i in range(2)])
+        assert code == 200 and at_work.wait(30)
+        job = jobs[0]
+        assert bt.stop_all(job.dir.parent, wait=0.2) is False               # not done in a fifth of a second
+        said = capsys.readouterr().out
+        assert "Finishing the picture" in said and "not finished in time: that picture was not saved" in said
+        assert job.stop.is_set()
+        job.thread.join(30)                                                 # it ends by itself after its picture, starting no other
+        assert [it["state"] for it in job.items] == ["done", "stopped"]
+        assert bt.stop_all(job.dir.parent) is True                          # and then there is nothing to wait for
+        assert capsys.readouterr().out == ""
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+@pytest.mark.skipif(not hasattr(__import__("signal"), "SIGHUP"), reason="Mac and Linux only")
+@pytest.mark.parametrize("terminal", ["there", "gone"])
+def test_stopping_the_real_tool_during_a_batch(lineart, tmp_path, terminal):
+    """The same with Boot Tool run for real and asked to stop (as closing its window does) while a
+    batch of thirty is under way: it says what it is waiting for, ends cleanly, leaves only whole
+    SVGs in the output folder and no session folder. With nothing left to print to ("gone": what it
+    prints to is closed first), it cannot say so, and still tidies up. (A check of the whole way
+    through; the tests above are the ones that pin the behaviour down.)"""
+    import os
+    import signal
+    import subprocess
+    import sys
+    from pathlib import Path
+    tmp, out = tmp_path / "tmp", tmp_path / "out"
+    tmp.mkdir()
+    env = {**os.environ, "TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp), "HOME": str(tmp_path), "USERPROFILE": str(tmp_path)}
+    proc = subprocess.Popen([sys.executable, "-u", "-m", "boottool", "ui", "--no-browser", "--port", "0"],
+                            stdout=subprocess.PIPE, text=True, env=env)
+    try:
+        url = proc.stdout.readline().split("at ", 1)[1].strip().rstrip("/")
+        image = _upload(url, lineart)
+        (folder,) = Path(tmp).glob("boottool-ui-*")
+        code, res = _start(url, [{"id": image, "name": f"p{i}.png", "params": {}} for i in range(30)], out_dir=str(out))
+        assert code == 200
+        for _ in range(600):                                                # until the first picture is done
+            st = json.loads(_get(f"{url}/api/batch/status?job={res['job']}")[1])
+            if st["counts"]["done"] >= 1:
+                break
+            time.sleep(0.05)
+        assert 1 <= st["counts"]["done"] < 30 and not st["finished"]
+        if terminal == "gone":
+            proc.stdout.close()
+            proc.send_signal(signal.SIGTERM)
+            proc.wait(timeout=90)                                           # (its exit code is not 0 then: Python's own last flush fails)
+        else:
+            proc.send_signal(signal.SIGTERM)
+            said = proc.communicate(timeout=90)[0]
+            assert proc.returncode == 0 and "Finishing the picture" in said
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+    saved = sorted(out.iterdir())
+    assert 1 <= len(saved) < 30 and all(p.read_text(encoding="utf-8").rstrip().endswith("</svg>") for p in saved)
+    assert not folder.exists()
