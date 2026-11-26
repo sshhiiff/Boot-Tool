@@ -604,6 +604,8 @@ async function addFiles(files) {
 function viewItem(i) {
   const it = BATCH.items[i]; if (!it) return;
   BATCH.sel = i; bindConvert(); imageId = it.id; natW = it.w; natH = it.h; fileName = it.name.replace(/\.[^.]+$/, ""); lastRes = null; stageKey = "";
+  libName = LIB.files[it.id] || ""; $("#dl").disabled = true; lastShown = null;   // its own library item; the result on screen is the picture before's
+  fileName = libName ? libName.replace(/\.svg$/i, "") : LIB.rename[it.id] || fileName;   // under the name it was given since
   ownUrl = false; origURL = it.url; $("#orig").src = it.url;
   setName(fileName, `· ${it.w}×${it.h}`); $("#empty").style.display = "none"; $("#stage").style.display = "block";
   setMode("svg"); renderSide(); run();
@@ -919,7 +921,7 @@ async function load(file, to) {
     IMG = {hist: j.hist || null, auto: j.auto || [0, 1, 255], tonal: !!j.tonal};
     const lv = IMG.tonal ? IMG.auto : [0, 1, 255]; [P.print.lv_black, P.print.lv_gamma, P.print.lv_white] = lv; P.print.colors = []; P.print.names = []; P.print.angles_s = [];
     BATCH.sel = -1; bindConvert();
-    libName = ""; imageId = j.id; natW = j.width; natH = j.height; fileName = file.name.replace(/\.[^.]+$/, ""); lastRes = null; lastPalette = []; plateView = "all"; stageKey = "";
+    libName = ""; $("#dl").disabled = true; lastShown = null; imageId = j.id; natW = j.width; natH = j.height; fileName = file.name.replace(/\.[^.]+$/, ""); lastRes = null; lastPalette = []; plateView = "all"; stageKey = "";
     if (origURL && ownUrl) URL.revokeObjectURL(origURL); origURL = URL.createObjectURL(file); ownUrl = true; $("#orig").src = origURL;
     setName(fileName, `.${(file.name.match(/\.([^.]+)$/) || [0, "png"])[1]} · ${natW}×${natH}`); $("#empty").style.display = "none"; $("#stage").style.display = "block";
     if (to) setTool(to); else if (tool === "help" || tool === "compose") setTool("convert"); else { if (mode === "batch") setMode("svg"); if (tool === "print") renderSide(); renderTabs(); run(); }
@@ -930,7 +932,7 @@ function setName(n, dim) { $("#nmEdit").textContent = n; if (dim !== undefined) 
   const e = $("#nmEdit"); e.onclick = () => { if (!imageId) return; e.contentEditable = "plaintext-only"; e.focus(); const r = document.createRange(); r.selectNodeContents(e); const g = getSelection(); g.removeAllRanges(); g.addRange(r); };
   const done = ok => {
     e.contentEditable = "false"; const v = e.textContent.replace(/[\\/:*?"<>|\n]/g, "").trim().slice(0, 80);
-    if (ok && v && v !== fileName) { fileName = v; if (libName) renameInLibrary(v); } e.textContent = fileName;
+    if (ok && v && v !== fileName) { fileName = v; if (libName) renameInLibrary(v); else LIB.rename[imageId] = v; } e.textContent = fileName;   // (not saved yet: its first save takes the name)
   };
   e.onblur = () => done(true); e.onkeydown = ev => { if (ev.key === "Enter") { ev.preventDefault(); e.blur(); } else if (ev.key === "Escape") { e.textContent = fileName; e.blur(); } ev.stopPropagation(); };
 })();
@@ -966,22 +968,31 @@ const cell = (l, v) => `<div><div class="lab">${l}</div><div class="val">${v}</d
 const kb = b => b > 1e6 ? (b / 1e6).toFixed(1) + " MB" : Math.round(b / 1e3) + " KB";
 function renderStatsBack() { if (lastShown) show(lastShown); }
 let lastShown = null;
-let libTimer = null, libName = "";
-async function renameInLibrary(to) {                 // the library item takes the new name; its graphic is left as it is
+// Every picture opened here has its own library item. libName is the current picture's; LIB.files has each
+// picture's by its id. (There used to be the one name only: after going to another picture, a rename or a save
+// that was still on its way landed on the picture before.) LIB.rename: a name typed before the first save.
+let libName = "";
+const LIB = {files: {}, rename: {}, timers: {}};
+function libIs(id, name) {                           // picture id's library item is now called name ("" = it has none)
+  LIB.files[id] = name; if (id !== imageId) return;
+  libName = name; const c = $("#libcell"); if (c && name) { c.textContent = "Saved as " + name; c.title = name; }
+}
+async function renameInLibrary(to, id = imageId) {   // the picture's library item takes the new name; its graphic is left as it is
   try {
-    const r = await fetch("/api/library/rename", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: libName, to})});
-    const j = await r.json(); if (!r.ok) throw new Error(j.error); libName = j.name;
-    const c = $("#libcell"); if (c) { c.textContent = "Saved as " + j.name; c.title = j.name; }
-  } catch (e) { libName = ""; }                       // removed from the library meanwhile: the next result is saved under the new name
+    const r = await fetch("/api/library/rename", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: LIB.files[id], to})});
+    const j = await r.json(); if (!r.ok) throw new Error(j.error); libIs(id, j.name);
+  } catch (e) { libIs(id, ""); }                      // removed from the library meanwhile: the next result is saved under the new name
 }
 function saveToLibrary() {
-  clearTimeout(libTimer); const id = imageId, name = fileName, svg = svgText;
-  libTimer = setTimeout(async () => {
+  const id = imageId, svg = svgText; let name = fileName;
+  clearTimeout(LIB.timers[id]);                        // (a timer for each picture: going on to the next one must not drop this one's save)
+  LIB.timers[id] = setTimeout(async () => {
+    if (LIB.rename[id]) { name = LIB.rename[id]; delete LIB.rename[id]; }
     try {
       const r = await fetch("/api/library/save", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name, svg, key: session + ":" + id})});
-      const j = await r.json(); if (!r.ok) throw new Error(j.error); libName = j.name;
-      const c = $("#libcell"); if (c) { c.textContent = "Saved as " + j.name; c.title = j.name; }
-    } catch (e) { const c = $("#libcell"); if (c) c.textContent = "Not saved: " + e.message; }
+      const j = await r.json(); if (!r.ok) throw new Error(j.error); libIs(id, j.name);
+      if (LIB.rename[id]) { const to = LIB.rename[id]; delete LIB.rename[id]; renameInLibrary(to, id); }   // renamed while this was on its way
+    } catch (e) { const c = $("#libcell"); if (c && id === imageId) c.textContent = "Not saved: " + e.message; }
   }, 1500);
 }
 function show(j) {

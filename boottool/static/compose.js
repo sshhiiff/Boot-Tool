@@ -837,13 +837,18 @@ const Compose = (() => {
       const t = el("div", "lt"); t.draggable = true;
       t.innerHTML = `<div class="lth"><img loading="lazy" alt="" src="/api/library/file?name=${encodeURIComponent(it.name)}"></div><div class="ltn">${esc(it.name.replace(/\.svg$/i, ""))}</div><span class="ltx" title="Delete from library">×</span>`;
       t.ondragstart = e => { e.dataTransfer.setData("text/x-boot-lib", it.name); e.dataTransfer.effectAllowed = "copy"; };
-      t.onclick = e => { if (!e.target.classList.contains("ltx")) addFromLibrary(it.name); };
+      let wait = null;                                  // a click on the name adds too, unless it turns out to be a double-click (rename)
+      t.onclick = e => {
+        if (e.target.classList.contains("ltx") || e.target.isContentEditable) return;
+        if (!e.target.classList.contains("ltn")) return addFromLibrary(it.name);
+        clearTimeout(wait); wait = setTimeout(() => addFromLibrary(it.name), 350);
+      };
       t.querySelector(".ltx").onclick = async e => {
         e.stopPropagation();
         await fetch("/api/library/delete", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({name: it.name})}); loadLibrary();
       };
       t.querySelector(".ltn").ondblclick = e => {
-        e.stopPropagation(); const n = e.target, old = n.textContent; n.contentEditable = "true"; n.focus(); selectAllIn(n);
+        e.stopPropagation(); clearTimeout(wait); const n = e.target, old = n.textContent; n.contentEditable = "true"; n.focus(); selectAllIn(n);
         let finished = false;
         const done = async ok => {
           if (finished) return; finished = true;

@@ -87,7 +87,9 @@ def rename(fname: str, new_stem: str) -> str:
         stem = clean_stem(new_stem)
         target = f"{stem}.svg"
         if target != fname:
-            target = _unique(stem)
+            there = folder() / target
+            if there.exists() and not there.samefile(src):  # taken by another item (not by this one under other capitals,
+                target = _unique(stem)                      # as a name that only differs in case is on Mac and Windows)
             src.rename(folder() / target)
             for k, v in list(_keys.items()):
                 if v == fname:
