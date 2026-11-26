@@ -126,6 +126,108 @@ def test_cli_run_keeps_files_that_differ_only_by_extension(tmp_path):
     assert sorted(json.loads((out / "dataset.json").read_text())["train"]) == ["svg/A.jpg.svg", "svg/a.png.svg", "svg/b.svg"]
 
 
+def _old_svg_names(rels):
+    """svg_names as released in v0.9.0."""
+    from collections import Counter
+    from pathlib import Path
+    key = lambda r: Path(r).with_suffix("").as_posix().lower()
+    count = Counter(key(r) for r in rels)
+    return {r: r + ".svg" if count[key(r)] > 1 else Path(r).with_suffix(".svg").as_posix() for r in rels}
+
+
+def _three_that_clash(src, tmp_path):
+    """a.png and a.jpg share a name, so a.png becomes a.png.svg: which is what a.png.webp would get too."""
+    from PIL import Image
+    src.mkdir()
+    make_lineart(src / "a.png")
+    Image.open(make_color(tmp_path / "c.png")).convert("RGB").save(src / "a.jpg")
+    Image.open(make_lineart(tmp_path / "w.png", invert=True)).save(src / "a.png.webp")
+    return {f.name: run_pipeline(f, Params()).svg for f in src.iterdir()}       # each picture's own trace
+
+
+def _saved(out):
+    """What `run` has saved: {picture: its SVG's text}, by the newest record of each picture."""
+    recs = {}
+    for line in (out / "manifest.jsonl").read_text().splitlines():
+        recs[json.loads(line)["source"]] = json.loads(line)
+    return {src: (out / rec["svg"]).read_text(encoding="utf-8") for src, rec in recs.items()}
+
+
+def test_cli_run_never_writes_two_pictures_to_one_svg(tmp_path):
+    src, out = tmp_path / "in", tmp_path / "out"
+    own = _three_that_clash(src, tmp_path)
+    runner = CliRunner()
+    r = runner.invoke(main, ["run", str(src), str(out), "--workers", "1"])
+    assert r.exit_code == 0, r.output
+    assert sorted(p.name for p in (out / "svg").iterdir()) == ["a.jpg.svg", "a.png.svg", "a.png.webp.svg"]
+    assert _saved(out) == own and len(set(own.values())) == 3                  # every picture has its own trace (one used to be lost)
+    assert "3 skipped" in runner.invoke(main, ["run", str(src), str(out), "--workers", "1"]).output
+
+
+def test_svg_names_are_unique_and_names_that_were_fine_stay(tmp_path):
+    import random
+    from collections import Counter
+    from pathlib import Path
+    from boottool.cli import svg_names
+    assert svg_names(["a.png", "b.jpg", "sub/c.gif"]) == {"a.png": "a.svg", "b.jpg": "b.svg", "sub/c.gif": "sub/c.svg"}
+    assert svg_names(["a.png", "A.jpg"]) == {"a.png": "a.png.svg", "A.jpg": "A.jpg.svg"}
+    assert svg_names(["a.png", "a.jpg", "a.png.webp"]) == {"a.jpg": "a.jpg.svg", "a.png": "a.png.svg", "a.png.webp": "a.png.webp.svg"}
+    assert svg_names(["Sub/a.png", "sub/a.png"]) == {"Sub/a.png": "Sub/a.png.svg", "sub/a.png": "sub/a.png-2.svg"}
+    rng = random.Random(7)
+    words = ["a", "A", "a.png", "a.png-2", "b", "a.png.svg", "x-2"]
+    for _ in range(2000):
+        rels = sorted({"/".join([rng.choice(words) for _ in range(rng.randint(0, 1))] + [rng.choice(words) + rng.choice([".png", ".jpg", ".PNG", ".webp"])])
+                       for _ in range(rng.randint(1, 8))})
+        if len({r.lower() for r in rels}) < len(rels):
+            continue                                       # (two names that differ only in case can't lie side by side on Mac or Windows)
+        names = svg_names(rels)
+        shuffled = rels[:]
+        rng.shuffle(shuffled)
+        assert svg_names(shuffled) == names                                            # the same names whatever the order
+        assert len({n.lower() for n in names.values()}) == len(rels), (rels, names)   # never two pictures on one SVG
+        old = _old_svg_names(rels)
+        old_count = Counter(n.lower() for n in old.values())
+        for r, n in names.items():
+            assert Path(n).parent == Path(r).parent and n.endswith(".svg"), (r, n)     # in its own folder
+            if old_count[old[r].lower()] == 1:
+                assert n == old[r], (rels, names, old)                                 # a name that was fine is unchanged
+
+
+def test_run_again_puts_right_a_folder_where_two_pictures_shared_an_svg(tmp_path, monkeypatch):
+    """An output folder made by v0.9.0, with one picture lost under another's name: running again
+    used to skip all three ("already done"), because some SVG existed under each name."""
+    src, out = tmp_path / "in", tmp_path / "out"
+    own = _three_that_clash(src, tmp_path)
+    runner = CliRunner()
+    with monkeypatch.context() as m:
+        m.setattr("boottool.cli.svg_names", _old_svg_names)
+        assert runner.invoke(main, ["run", str(src), str(out), "--workers", "1"]).exit_code == 0
+    assert sorted(p.name for p in (out / "svg").iterdir()) == ["a.jpg.svg", "a.png.svg"]   # the mix-up, as it was
+    r = runner.invoke(main, ["run", str(src), str(out), "--workers", "1"])
+    assert r.exit_code == 0 and "1 skipped" in r.output, r.output                      # a.jpg was right; the other two are done again
+    assert _saved(out) == own
+    assert "3 skipped" in runner.invoke(main, ["run", str(src), str(out), "--workers", "1"]).output
+
+
+def test_run_again_when_a_picture_is_replaced_by_one_traced_before(tmp_path):
+    """b.png is copied over a.png. Both names have an SVG and the picture "was traced before", so
+    a.png used to be skipped: a.svg went on showing the old a.png."""
+    import shutil
+    src, out = tmp_path / "in", tmp_path / "out"
+    src.mkdir()
+    make_lineart(src / "a.png")
+    make_color(src / "b.png")
+    runner = CliRunner()
+    assert "2 to process" in runner.invoke(main, ["run", str(src), str(out), "--workers", "1"]).output
+    old_a = (out / "svg" / "a.svg").read_text(encoding="utf-8")
+    shutil.copyfile(src / "b.png", src / "a.png")
+    r = runner.invoke(main, ["run", str(src), str(out), "--workers", "1"])
+    assert "1 skipped" in r.output and "1 to process" in r.output, r.output
+    new_a = (out / "svg" / "a.svg").read_text(encoding="utf-8")
+    assert new_a == (out / "svg" / "b.svg").read_text(encoding="utf-8") != old_a
+    assert "2 skipped" in runner.invoke(main, ["run", str(src), str(out), "--workers", "1"]).output
+
+
 def test_cli_trace(lineart, tmp_path):
     out = tmp_path / "o.svg"
     r = CliRunner().invoke(main, ["trace", str(lineart), str(out)])

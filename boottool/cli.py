@@ -4,6 +4,7 @@ import html
 import json
 import os
 from collections import Counter
+from itertools import chain, count
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -109,10 +110,19 @@ def trace(src, dst, **kw):
 def svg_names(rels: list[str]) -> dict[str, str]:
     """Where each input's SVG goes, relative to svg/. Usually a.png -> a.svg, but files that share a
     name apart from the extension (a.png and a.jpg) keep it, so neither replaces the other:
-    a.png.svg and a.jpg.svg. Names are compared ignoring case, as on Mac and Windows."""
-    key = lambda r: Path(r).with_suffix("").as_posix().lower()
-    count = Counter(key(r) for r in rels)
-    return {r: r + ".svg" if count[key(r)] > 1 else Path(r).with_suffix(".svg").as_posix() for r in rels}
+    a.png.svg and a.jpg.svg. Names are compared ignoring case, as on Mac and Windows.
+
+    No two inputs ever get the same name: each takes the first of a.svg (if nobody shares it),
+    a.png.svg, a.png-2.svg ... that is still free. (a.png.webp next to a.png and a.jpg used to be
+    given a.png.svg as well, and one of the two pictures was lost.)"""
+    plain = {r: Path(r).with_suffix(".svg").as_posix() for r in rels}
+    shared = Counter(n.lower() for n in plain.values())
+    names, taken = {}, set()
+    for r in sorted(rels):                                    # the same order, so the same names, every run
+        wishes = ([plain[r]] if shared[plain[r].lower()] == 1 else []) + [r + ".svg"]
+        names[r] = next(n for n in chain(wishes, (f"{r}-{k}.svg" for k in count(2))) if n.lower() not in taken)
+        taken.add(names[r].lower())
+    return names
 
 
 def _svg_of(rec: dict) -> str:
@@ -163,7 +173,7 @@ def run(input_dir, out_dir, prov_csv, default_license, workers, force, **kw):
     svg_root = out_root / "svg"
     manifest = Manifest(out_root / "manifest.jsonl")
     prov_map = load_provenance(prov_csv)
-    done = set() if force else manifest.done_keys()
+    saved = {} if force else manifest.last_saved()             # which picture's trace each SVG holds
 
     files = sorted(f for f in in_root.rglob("*") if f.suffix.lower() in IMG_EXTS and f.is_file())
     names = svg_names([f.relative_to(in_root).as_posix() for f in files])
@@ -172,7 +182,10 @@ def run(input_dir, out_dir, prov_csv, default_license, workers, force, **kw):
         rel = f.relative_to(in_root).as_posix()
         sha = sha256_file(f)
         out_svg = svg_root / names[rel]
-        if (sha, p.key()) in done and out_svg.exists():
+        # Done already only if this SVG was last written from this very picture with these settings. (It
+        # used to be enough that the picture had been traced once and some file had this name: after a
+        # mix-up, or when names shift because pictures were added, another picture's SVG was kept.)
+        if saved.get(("svg/" + names[rel]).lower()) == (sha, p.key()) and out_svg.exists():
             skipped += 1
             continue
         prov = dict(prov_map.get(rel, {}))

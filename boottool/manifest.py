@@ -30,13 +30,15 @@ class Manifest:
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, sort_keys=True) + "\n")
 
-    def done_keys(self) -> set[tuple[str, str]]:
-        """(sha256, params_key) pairs already processed without error."""
-        return {
-            (r["sha256"], r["params_key"])
-            for r in self.load()
-            if r.get("status") in ("ok", "low_score") and r.get("sha256")
-        }
+    def last_saved(self) -> dict[str, tuple[str, str]]:
+        """For every SVG written so far: the (sha256, params_key) of the picture whose trace was saved
+        there last. Names are folded to lower case, as they are told apart ignoring case."""
+        out: dict[str, tuple[str, str]] = {}
+        for r in self.load():
+            if r.get("status") in ("ok", "low_score") and r.get("sha256"):
+                svg = r.get("svg") or "svg/" + Path(r["source"]).with_suffix(".svg").as_posix()
+                out[svg.lower()] = (r["sha256"], r["params_key"])
+        return out
 
 
 def latest_by_source(records: list[dict]) -> list[dict]:
