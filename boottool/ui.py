@@ -87,6 +87,7 @@ def _is_hex(s: str) -> bool:
 class Engine:
     def __init__(self):
         self.dir = Path(tempfile.mkdtemp(prefix="boottool-ui-"))
+        _SESSION_DIRS.append(self.dir)
         self.files: dict[str, Path] = {}
         self.cache: OrderedDict = OrderedDict()
         self.jobs: OrderedDict = OrderedDict()
@@ -372,10 +373,50 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
     return Server((host, port), Handler)
 
 
+_SESSION_DIRS: list = []        # the temporary folders made by this run (one per Engine)
+_CLOSE_WAIT = 4.0               # seconds; Windows ends a program 5 seconds after its console window is closed
+_console_handler: list = []     # kept here, so that Windows can still call it
+
+
+def _console_closing(event: int) -> bool:
+    """Windows calls this, on a thread of its own, when the console window is closed (2) and on
+    Ctrl+Break (1). Neither reaches Python as Ctrl+C does, and after a closed window the program
+    is ended five seconds later however far it has got. So: ask the tool to stop the usual way,
+    wait until it has deleted its temporary folder, and if time runs short delete what is left
+    from here. (Log-off and shutdown, 5 and 6, are treated the same should Windows ever send
+    them: as a rule it ends a program like this one before it does.)"""
+    import _thread
+    if event not in (1, 2, 5, 6):                      # Ctrl+C (0) stays Python's own
+        return False
+    _thread.interrupt_main()                           # the main thread gets a KeyboardInterrupt, as from Ctrl+C
+    end = time.monotonic() + _CLOSE_WAIT
+    while time.monotonic() < end and any(d.exists() for d in _SESSION_DIRS):
+        time.sleep(0.05)
+    for d in _SESSION_DIRS:
+        shutil.rmtree(d, ignore_errors=True)
+    return True
+
+
+def _stop_on_console_close() -> None:
+    """Windows only: have _console_closing called for the console's own events."""
+    import ctypes
+    from ctypes import wintypes
+    if _console_handler:
+        return
+    handler = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.DWORD)(_console_closing)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.SetConsoleCtrlHandler.argtypes = (ctypes.c_void_p, wintypes.BOOL)
+    kernel32.SetConsoleCtrlHandler.restype = wintypes.BOOL
+    if kernel32.SetConsoleCtrlHandler(ctypes.cast(handler, ctypes.c_void_p), True):
+        _console_handler.append(handler)
+
+
 def stop_on_close() -> None:
     """Closing the terminal window (SIGHUP) or a normal stop request (SIGTERM) ends the tool the same
-    way Ctrl+C does, so it still tidies up after itself. Not available on Windows."""
+    way Ctrl+C does, so it still tidies up after itself. On Windows the console tells the program in
+    its own way (see _console_closing)."""
     import signal
+    import sys
 
     def stop(signum, frame):
         raise KeyboardInterrupt
@@ -386,6 +427,11 @@ def stop_on_close() -> None:
                 signal.signal(sig, stop)
             except (ValueError, OSError):       # not the main thread, or not allowed here
                 pass
+    if sys.platform == "win32":
+        try:
+            _stop_on_console_close()
+        except (OSError, AttributeError, ValueError):   # no console to speak of: nothing to listen to
+            pass
 
 
 def serve(port: int = 8765, open_browser: bool = True) -> None:

@@ -116,3 +116,89 @@ def test_closing_the_terminal_also_removes_the_temporary_folder(lineart, tmp_pat
             proc.kill()
     assert not folder.exists()
 
+
+_CLOSED_WINDOW = """
+import json, sys, threading, time
+from boottool import ui
+slow = sys.argv[1] == "slow"
+srv = ui.make_server("127.0.0.1", 0)
+(folder,) = ui._SESSION_DIRS
+(folder / "picture.png").write_bytes(b"an opened picture")
+assert ui._console_closing(0) is False and folder.exists()      # Ctrl+C is not its business
+if slow:
+    ui._CLOSE_WAIT = 0.5
+said = []
+def window_closed():
+    time.sleep(0.5)                                             # the tool is up and waiting for requests by now
+    t0 = time.monotonic()
+    said.append([ui._console_closing(2), folder.exists(), time.monotonic() - t0])
+threading.Thread(target=window_closed).start()
+try:
+    srv.serve_forever()
+    how = "went on"
+except KeyboardInterrupt:
+    how = "stopped as after Ctrl+C"
+    if slow:
+        time.sleep(2)                                           # a stop that takes longer than Windows allows
+finally:
+    left = folder.exists()
+    srv.server_close()
+while not said:
+    time.sleep(0.01)
+print(json.dumps({"how": how, "handled": said[0][0], "folder then": said[0][1], "after": said[0][2], "left for the tool": left}))
+"""
+
+
+@pytest.mark.parametrize("stop", ["in time", "slow"])
+def test_a_closed_console_window_stops_the_tool_and_removes_the_temporary_folder(tmp_path, stop):
+    """Windows tells a program in its own way that its console window was closed, and ends it five
+    seconds later. Boot Tool then stops as after Ctrl+C and deletes its temporary folder; if stopping
+    takes too long, the folder is deleted all the same before the time is up. (What Windows calls is
+    run here directly, so this is tried on every system.)"""
+    import json
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    env = {**os.environ, "TMPDIR": str(tmp_path), "TMP": str(tmp_path), "TEMP": str(tmp_path),
+           "PYTHONPATH": str(Path(__file__).resolve().parent.parent) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    r = subprocess.run([sys.executable, "-c", _CLOSED_WINDOW, stop], capture_output=True, text=True, env=env, timeout=180)   # starting Python with all of Boot Tool can take half a minute on a busy machine
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    assert out["how"] == "stopped as after Ctrl+C" and out["handled"] is True and out["folder then"] is False
+    if stop == "slow":
+        assert out["left for the tool"] is False and 0.4 < out["after"] < 1.9   # deleted while the tool was still stopping
+    else:
+        assert out["left for the tool"] is True and out["after"] < 3.5      # the tool tidied up itself, well inside Windows' five seconds
+    assert not list(tmp_path.glob("boottool-ui-*"))
+
+
+@pytest.mark.skipif(__import__("sys").platform != "win32", reason="Windows only")
+def test_ctrl_break_on_windows_also_removes_the_temporary_folder(lineart, tmp_path):
+    """Ctrl+Break reaches a program the same way a closed console window does, and (unlike a closed
+    window) a test can send it. It used to end Boot Tool on the spot, leaving the folder behind."""
+    import os
+    import signal
+    import subprocess
+    import sys
+    from pathlib import Path
+    tmp = tmp_path / "tmp"
+    tmp.mkdir()
+    env = {**os.environ, "TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp)}
+    proc = subprocess.Popen([sys.executable, "-u", "-m", "boottool", "ui", "--no-browser", "--port", "0"],
+                            stdout=subprocess.PIPE, text=True, env=env, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    guard = threading.Timer(60, lambda: proc.poll() is None and proc.kill())   # never left waiting for a Boot Tool that hangs
+    guard.daemon = True
+    guard.start()
+    try:
+        url = proc.stdout.readline().split("at ", 1)[1].strip().rstrip("/")
+        assert _post(url + "/api/upload", lineart.read_bytes())[0] == 200
+        (folder,) = Path(tmp).glob("boottool-ui-*")
+        proc.send_signal(signal.CTRL_BREAK_EVENT)
+        assert proc.wait(timeout=20) == 0
+    finally:
+        guard.cancel()
+        if proc.poll() is None:
+            proc.kill()
+    assert not folder.exists()
+
