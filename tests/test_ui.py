@@ -59,6 +59,32 @@ def test_page_defaults_upload_trace(server, lineart):
     assert trace({}, 1)[0] == 204
 
 
+def test_the_page_opens_whatever_follows_its_address(server):
+    """A bookmark or link that adds "?something" to the address used to get a bare "not found"
+    instead of the page."""
+    page = urllib.request.urlopen(server + "/").read()
+    assert b"<title>" in page
+    for address in ("/?x=1", "/?", "/index.html?v=2"):
+        assert urllib.request.urlopen(server + address).read() == page, address
+    assert json.loads(urllib.request.urlopen(server + "/api/defaults?x=1").read())["convert"]
+    with pytest.raises(urllib.error.HTTPError) as e:                        # but not just anything is the page
+        urllib.request.urlopen(server + "/index.htmlx?x=1")
+    assert e.value.code == 404
+
+
+def test_a_request_with_a_garbled_length_gets_an_answer(server, capfd):
+    """It used to get none: the connection was dropped and an error was printed in Boot Tool's window."""
+    import socket
+    host, port = server.rsplit("/", 1)[1].split(":")
+    with socket.create_connection((host, int(port)), timeout=10) as s:
+        s.sendall(f"POST /api/upload HTTP/1.1\r\nHost: {host}:{port}\r\nContent-Length: abc\r\n\r\n".encode())
+        answer = b""
+        while chunk := s.recv(2000):                                        # until Boot Tool has said all it has to say
+            answer += chunk
+    assert answer.startswith(b"HTTP/1.0 400") and b"empty or too large" in answer
+    assert "Traceback" not in capfd.readouterr().err
+
+
 def test_bad_inputs(server):
     assert _post(server + "/api/upload", b"not an image")[0] == 400
     code, _ = _post(server + "/api/trace", json.dumps({"id": "nope"}).encode(), "application/json")

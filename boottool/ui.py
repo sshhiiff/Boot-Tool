@@ -293,9 +293,9 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
                 if url.path[len("/static/"):] in ok and f.is_file():
                     return self._send(200, f.read_bytes(), "text/javascript; charset=utf-8")
                 return self._json(404, {"error": "not found"})
-            if self.path in ("/", "/index.html"):
+            if url.path in ("/", "/index.html"):            # (url.path: whatever follows a "?" in the address is not part of the page's name)
                 self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-            elif self.path == "/api/defaults":
+            elif url.path == "/api/defaults":
                 self._json(200, {"convert": Params().to_dict(), "halftone": asdict(ht.HalftoneParams()),
                                  "separate": asdict(sep.SepParams()),
                                  "print": asdict(pr.PrintParams()), "page": asdict(coerce_page({})),
@@ -306,7 +306,10 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
         def do_POST(self):
             if not self._local_only():
                 return
-            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:                             # a length that is not a number: answered like an empty request
+                n = 0
             if n <= 0 or n > MAX_UPLOAD:
                 return self._json(413 if n > 0 else 400, {"error": "empty or too large (80 MB max)"})
             body = self.rfile.read(n)
