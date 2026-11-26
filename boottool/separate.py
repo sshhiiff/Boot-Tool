@@ -10,7 +10,7 @@ import numpy as np
 from .config import Params
 from .page import Job, PageOpts, Plate, fit_artwork
 from .preprocess import prepare
-from .trace import mask_to_path
+from .trace import mask_to_polys, polygons_to_path
 
 MAX_INKS = 10
 
@@ -154,7 +154,8 @@ def build(path, p: SepParams, page: PageOpts) -> Job:
         auto_name = base if seen[base] == 1 else f"{base} {seen[base]}"
         name = p.names[idx] if idx < len(p.names) and p.names[idx] else auto_name
         palette_info.append({"hex": hex_, "auto_hex": auto_hex, "name": name, "auto_name": auto_name})
-        d = mask_to_path(mask, tp)
+        # (A colour that reaches the picture's edge is outlined along it: see mask_to_polys.)
+        d = polygons_to_path(mask_to_polys(mask, tp, edge=True), tp.corner_deg, tp.precision)
         if not d:
             continue
         body = (f'<g transform="translate({ox:.3f} {oy:.3f}) scale({sc:.6f})">'
