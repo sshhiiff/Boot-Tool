@@ -467,9 +467,12 @@ const Compose = (() => {
   }
   function zIndex(it) { let z = 0, t = it; const chain = []; while (t && t !== L.art) { chain.unshift(t.index); t = t.parent; } chain.forEach((v, i) => z += v / Math.pow(1e4, i)); return z; }
   function replaceWith(olds, news) {
-    const tops = [...new Set(olds.map(topOf))], idx = Math.max(...tops.map(t => t.index));
+    const tops = [...new Set(olds.map(topOf))], top = tops.reduce((a, b) => b.index > a.index ? b : a), above = top.nextSibling;
     for (const o of olds) o.remove();
     for (const t of tops) if (t.parent && t.children && !t.children.length) t.remove();
+    // the result takes the place of the front-most shape that went into it: under whatever was above that one (the
+    // place used to be counted before the shapes were taken out, which put the result above shapes that were above them)
+    const idx = above && above.parent === L.art ? above.index : top.parent === L.art ? top.index + 1 : L.art.children.length;
     const made = news.map(n => { L.art.insertChild(Math.min(idx, L.art.children.length), n); n.applyMatrix = true; return place(n, "shape", "Shape"); });
     commit(); select(made);
   }
@@ -479,9 +482,15 @@ const Compose = (() => {
     if (ps.length < 2) return toast_("Select an open line, or two open lines.");
     let a = ps[0];
     for (const b of ps.slice(1)) {
-      const ea = [a.firstSegment.point, a.lastSegment.point], eb = [b.firstSegment.point, b.lastSegment.point];
-      let d = Infinity; for (const x of ea) for (const y of eb) d = Math.min(d, x.getDistance(y));
-      a.join(b, d + 1e-6);                               // connect the two nearest ends, without also closing the loop
+      // The two nearest ends are connected. Each line is turned so that those are a's end and b's start; then b's points
+      // follow a's. Both end points stay (they used to be made into one point, which moved the line), unless they are one already.
+      let near = null;
+      for (const ra of [false, true]) for (const rb of [false, true]) {
+        const d = (ra ? a.firstSegment : a.lastSegment).point.getDistance((rb ? b.lastSegment : b.firstSegment).point);
+        if (!near || d < near.d) near = {d, ra, rb};
+      }
+      if (near.ra) a.reverse(); if (near.rb) b.reverse();
+      a.join(b);
     }
     commit(); select([topOf(a)]);
   }
@@ -541,9 +550,13 @@ const Compose = (() => {
     for (const it of S.sel) it.translate(new paper.Point(dx, dy)); commit(); drawUI(); syncProps();
   }
   function order(kind) {
-    for (const it of kind === "front" || kind === "up" ? S.sel.slice() : S.sel.slice().reverse()) {
+    // Taken in their order in the stack, not the order they were clicked in (which made two neighbours swap and swap
+    // back: nothing moved). A shape only passes one that is not selected too, so shapes selected together move together.
+    const sel = new Set(S.sel), by = S.sel.slice().sort((a, b) => zIndex(a) - zIndex(b));
+    for (const it of kind === "front" || kind === "down" ? by : by.reverse()) {
       if (kind === "front") it.bringToFront(); else if (kind === "back") it.sendToBack();
-      else if (kind === "up" && it.nextSibling) it.insertAbove(it.nextSibling); else if (kind === "down" && it.previousSibling) it.insertBelow(it.previousSibling);
+      else if (kind === "up" && it.nextSibling && !sel.has(it.nextSibling)) it.insertAbove(it.nextSibling);
+      else if (kind === "down" && it.previousSibling && !sel.has(it.previousSibling)) it.insertBelow(it.previousSibling);
     }
     commit(); renderSide();
   }
