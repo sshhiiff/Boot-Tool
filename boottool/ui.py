@@ -241,12 +241,21 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
             self._send(code, json.dumps(obj).encode())
 
         def _local_only(self) -> bool:
-            """Refuse requests that did not come from this computer's own page (stops other websites
-            from driving the tool, which can now write files)."""
+            """Refuse requests that did not come from Boot Tool's own page (stops other websites, and
+            the pages of other programs on this computer, from driving the tool, which can write and
+            delete files). A browser says in "Origin" which page a request comes from: it must be
+            this very address and port. Without it, the request is the page's own or no browser's."""
             ok = {"127.0.0.1", "localhost", "::1"}
-            host = urlparse("//" + (self.headers.get("Host") or "")).hostname or ""
             origin = self.headers.get("Origin")
-            if host not in ok or (origin and (urlparse(origin).hostname or "") not in ok):
+            try:
+                here = urlparse("//" + (self.headers.get("Host") or ""))
+                host, own = here.hostname or "", True
+                if origin is not None:
+                    page = urlparse(origin)
+                    own = (page.scheme, page.hostname, page.port) == ("http", here.hostname, here.port)
+            except ValueError:                             # an address that cannot be read
+                host, own = "", False
+            if host not in ok or not own:
                 self._json(403, {"error": "This tool only answers its own page on this computer."})
                 return False
             return True

@@ -98,6 +98,37 @@ def test_batch_rejects_bad_requests(server, lineart, tmp_path):
     assert code == 400 and "folder" in res["error"].lower()
 
 
+def test_a_page_of_another_program_on_this_computer_may_not_use_the_api(server):
+    """A page loaded from another port of this computer (the web page of some other program) is not
+    Boot Tool's own page. It used to be let in, and could save into the library and delete from it."""
+    from boottool import library
+    port = server.rsplit(":", 1)[1]
+
+    def post(path, data, origin, host=None):
+        headers = {"Content-Type": "text/plain", **({} if origin is None else {"Origin": origin}), **({"Host": host} if host else {})}
+        req = urllib.request.Request(server + path, data=json.dumps(data).encode(), method="POST", headers=headers)   # (as a page can send without asking first)
+        try:
+            with urllib.request.urlopen(req) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+
+    def saved():
+        return [i["name"] for i in library.listing()]
+    svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><path d="M0 0h5v5z"/></svg>'
+    own = f"http://127.0.0.1:{port}"
+    assert post("/api/library/save", {"name": "logo", "svg": svg}, own) == 200 and saved() == ["logo.svg"]
+    for other in (f"http://localhost:{int(port) + 1}", f"http://127.0.0.1:{int(port) + 1}", "http://127.0.0.1", f"http://localhost:{port}",
+                  f"https://127.0.0.1:{port}", f"http://127.0.0.1:{port}x", "null", ""):
+        assert post("/api/library/delete", {"name": "logo.svg"}, other) == 403, other
+        assert post("/api/library/save", {"name": "planted", "svg": svg}, other) == 403, other
+        assert saved() == ["logo.svg"], other
+    assert post("/api/library/delete", {"name": "logo.svg"}, own, host="127.0.0.1:abc") == 403 and saved() == ["logo.svg"]   # an address that cannot be read
+    assert post("/api/library/save", {"name": "second", "svg": svg}, f"http://localhost:{port}", host=f"localhost:{port}") == 200   # the page opened as "localhost"
+    assert post("/api/library/delete", {"name": "second.svg"}, None) == 200           # no browser at all (the command line, the tests)
+    assert post("/api/library/delete", {"name": "logo.svg"}, own) == 200 and saved() == []
+
+
 def test_only_this_computers_own_page_may_use_the_api(server, lineart):
     port = server.rsplit(":", 1)[1]
     assert _get(server + "/api/defaults")[0] == 200
