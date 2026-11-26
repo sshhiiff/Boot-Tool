@@ -61,12 +61,15 @@ const Simulate = (() => {
   // ------------------------------------------------------------------ drawing
   function bounds(g) { return {x0: -g.maxX - 4, x1: g.maxX + 4, y0: -6, y1: g.maxY + 6}; }
   function measureLines(g) {
-    const col = lum(S.colour) < 0.5 ? "#ffffff" : "#000000", t = (x, y, s, anchor = "middle", rot = 0) => `<text x="${f(x)}" y="${f(y)}" text-anchor="${anchor}" transform="rotate(${rot} ${f(x)} ${f(y)})" font-size="2" fill="${col}" font-family="Arial Narrow,Arial,sans-serif">${s}</text>`;
-    const ln = (a, b, c, d) => `<path d="M ${f(a)} ${f(b)} L ${f(c)} ${f(d)}" stroke="${col}" stroke-width="0.12" stroke-dasharray="0.6 0.4" fill="none"/>`;
+    // On the shirt a measurement takes the colour that shows on it. Beside the shirt (length, neck) it is on the page's
+    // or the JPG's own background, whatever the shirt: black with a white edge, which shows on anything.
+    const col = lum(S.colour) < 0.5 ? "#ffffff" : "#000000";
+    const t = (x, y, s, anchor = "middle", rot = 0, beside = false) => `<text x="${f(x)}" y="${f(y)}" text-anchor="${anchor}" transform="rotate(${rot} ${f(x)} ${f(y)})" font-size="2" fill="${beside ? "#000000" : col}"${beside ? ' stroke="#ffffff" stroke-width="0.32" stroke-linejoin="round" paint-order="stroke"' : ""} font-family="Arial Narrow,Arial,sans-serif">${s}</text>`;
+    const ln = (a, b, c, d, beside = false) => (beside ? `<path d="M ${f(a)} ${f(b)} L ${f(c)} ${f(d)}" stroke="#ffffff" stroke-width="0.4" fill="none"/>` : "") + `<path d="M ${f(a)} ${f(b)} L ${f(c)} ${f(d)}" stroke="${beside ? "#000000" : col}" stroke-width="0.12" stroke-dasharray="0.6 0.4" fill="none"/>`;
     const y = g.sy + g.armH + 4;
     return `<g opacity=".85">${ln(-g.bw, y, g.bw, y)}${t(0, y - 0.7, `chest ${g.chest} cm`)}
-      ${ln(g.bw + 3, 0, g.bw + 3, g.length)}${t(g.bw + 4.2, g.length / 2, `length ${g.length} cm`, "middle", 90)}
-      ${ln(-g.nw, -2, g.nw, -2)}${t(0, -2.7, `neck ${f(g.nw * 2)} cm`)}</g>`;
+      ${ln(g.bw + 3, 0, g.bw + 3, g.length, true)}${t(g.bw + 4.2, g.length / 2, `length ${g.length} cm`, "middle", 90, true)}
+      ${ln(-g.nw, -2, g.nw, -2, true)}${t(0, -2.7, `neck ${f(g.nw * 2)} cm`, "middle", 0, true)}</g>`;
   }
   function draw() {
     if (!svg) return;
@@ -110,11 +113,13 @@ const Simulate = (() => {
     return out.join("");
   }
   function dimLines(d, g, ui) {
-    const col = lum(S.colour) < 0.5 ? "#ffffff" : "#000000", k = ui ? 1 / S.pxcm : 0.2, fs = ui ? 13 * k : 1.8, a = rad(d);
-    const x = d.x - d.w / 2, y = g.collarY + topC(d), lab = `${r1(d.w)} × ${r1(d.h)} cm${d.rot ? " · " + r1(d.rot) + "°" : ""}`, c2 = ui ? "#ec008c" : col;
+    // On the page these are magenta. In the JPG they can lie on the shirt or beside it, so they are black with a white edge,
+    // which shows on both (they used to take the colour that shows on the shirt: white on white beside a dark one).
+    const k = ui ? 1 / S.pxcm : 0.2, fs = ui ? 13 * k : 1.8, a = rad(d);
+    const x = d.x - d.w / 2, y = g.collarY + topC(d), lab = `${r1(d.w)} × ${r1(d.h)} cm${d.rot ? " · " + r1(d.rot) + "°" : ""}`, c2 = ui ? "#ec008c" : "#000000";
     const eh = Math.abs(d.w * Math.sin(a)) + Math.abs(d.h * Math.cos(a)), bot = g.collarY + d.y + d.h / 2 + eh / 2;
-    const tx = (px, py, s, an = "middle") => `<text x="${f(px)}" y="${f(py)}" text-anchor="${an}" font-size="${f(fs)}" fill="${c2}" font-family="Arial Narrow,Arial,sans-serif">${s}</text>`;
-    const ln = (a_, b, c, e) => `<path d="M ${f(a_)} ${f(b)} L ${f(c)} ${f(e)}" stroke="${c2}" stroke-width="${f(ui ? k : 0.1)}" fill="none"/>`;
+    const tx = (px, py, s, an = "middle") => `<text x="${f(px)}" y="${f(py)}" text-anchor="${an}" font-size="${f(fs)}" fill="${c2}"${ui ? "" : ' stroke="#ffffff" stroke-width="0.3" stroke-linejoin="round" paint-order="stroke"'} font-family="Arial Narrow,Arial,sans-serif">${s}</text>`;
+    const ln = (a_, b, c, e) => (ui ? "" : `<path d="M ${f(a_)} ${f(b)} L ${f(c)} ${f(e)}" stroke="#ffffff" stroke-width="0.34" fill="none"/>`) + `<path d="M ${f(a_)} ${f(b)} L ${f(c)} ${f(e)}" stroke="${c2}" stroke-width="${f(ui ? k : 0.1)}" fill="none"/>`;
     const xl = x - 3 * (ui ? k * 5 : 0.8);
     return `<g pointer-events="none">${ln(xl, g.collarY, xl, y)}${tx(xl - fs * 0.35, (g.collarY + y) / 2, `${r1(topC(d))} cm`, "end")}${tx(d.x, bot + fs * 1.4, lab)}</g>`;
   }
@@ -261,7 +266,13 @@ const Simulate = (() => {
   // ------------------------------------------------------------------ JPG
   async function saveJpg() {
     try {
-      const g = geo(), b = bounds(g), w = b.x1 - b.x0, h = b.y1 - b.y0, ppcm = Math.min(24, 4000 / Math.max(w, h));
+      const g = geo(), b = bounds(g);
+      if (S.jpgLines) for (const d of cur()) {             // room for the designs' measurements, where they reach past the shirt's picture
+        const a = rad(d), eh = Math.abs(d.w * Math.sin(a)) + Math.abs(d.h * Math.cos(a)), half = (`${r1(d.w)} × ${r1(d.h)} cm`.length + (d.rot ? 8 : 0)) * 0.55;
+        b.y1 = Math.max(b.y1, g.collarY + d.y + d.h / 2 + eh / 2 + 4);
+        b.x0 = Math.min(b.x0, d.x - d.w / 2 - 10, d.x - half); b.x1 = Math.max(b.x1, d.x + half);
+      }
+      const w = b.x1 - b.x0, h = b.y1 - b.y0, ppcm = Math.min(24, 4000 / Math.max(w, h));
       const pw = Math.round(w * ppcm), ph = Math.round(h * ppcm);
       const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${pw}" height="${ph}" viewBox="${f(b.x0)} ${f(b.y0)} ${f(w)} ${f(h)}"><rect x="${f(b.x0)}" y="${f(b.y0)}" width="${f(w)}" height="${f(h)}" fill="#ffffff"/>${shirtSVG(g, "sclip")}${S.jpgLines ? measureLines(g) : ""}${designsSVG(false, S.jpgLines)}</svg>`;
       const url = URL.createObjectURL(new Blob([s], {type: "image/svg+xml"})), im = new Image(); im.src = url; await im.decode();
