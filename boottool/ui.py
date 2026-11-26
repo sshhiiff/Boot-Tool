@@ -203,7 +203,8 @@ def download_response(engine: "Engine", req: dict):
 
 
 def _scores(svg, prep) -> dict:
-    """The self-check needs an SVG rasteriser (rsvg-convert or cairosvg). Without one the tool still works; the check is just skipped."""
+    """The self-check needs an SVG rasteriser (rsvg-convert or cairosvg). Without one the tool still works; the check is just skipped.
+    (So it is when the check fails: there are no scores then, and "error" says why.)"""
     return score_or_none(svg, prep)
 
 

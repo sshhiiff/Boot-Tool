@@ -19,6 +19,16 @@ IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".webp"}
 NO_CHECK = ("Note: the self-check was skipped because no SVG rasteriser was found. The SVGs are fine; "
             "to get scores, install librsvg (rsvg-convert) or `pip install cairosvg`.")
 
+
+def _check_failed(names: list, why: str) -> str:
+    """What to say when the self-check ran and went wrong (not: was skipped for want of a rasteriser)."""
+    if len(names) == 1:
+        return (f"Note: the self-check could not be done for {names[0]}: {why}\n"
+                "The SVG was written all the same, but nothing has checked it: open it to see that it is right.")
+    return (f"Note: the self-check could not be done for {len(names)} pictures (marked above). The first, {names[0]}: {why}\n"
+            "The SVGs were written all the same, but nothing has checked them: open them to see that they are right.")
+
+
 _PARAM_OPTIONS = [
     click.option("--mode", type=click.Choice(["auto", "lineart", "color"]), default="auto",
                  show_default=True, help="auto picks line art vs colour per image."),
@@ -97,7 +107,9 @@ def trace(src, dst, **kw):
     res = run_pipeline(src, p)
     Path(dst).parent.mkdir(parents=True, exist_ok=True)
     Path(dst).write_text(res.svg, encoding="utf-8")
-    if res.scores.get("ssim_target") is None:
+    if res.scores.get("error"):
+        click.echo(_check_failed(["this picture"], res.scores["error"]), err=True)
+    elif res.scores.get("ssim_target") is None:
         click.echo(NO_CHECK, err=True)
     click.echo(json.dumps(
         {"mode": res.mode, "size": res.size, "stats": res.stats, "scores": res.scores}, indent=2
@@ -182,17 +194,21 @@ def run(input_dir, out_dir, prov_csv, default_license, workers, force, **kw):
 
     click.echo(f"{len(files)} images found, {skipped} skipped (already done), {len(jobs)} to process")
     counts: Counter = Counter()
-    unchecked = [0]
+    unchecked, unsure = [0], []
 
     def handle(i, rec):
         manifest.append(rec)
         counts[rec["status"]] += 1
         score = rec.get("scores", {}).get("ssim_target")
+        failed = rec.get("scores", {}).get("error") if rec["status"] != "error" else None
+        if failed:
+            unsure.append((rec["source"], failed))
         if score is None:
             score = "-"
-            unchecked[0] += rec["status"] != "error"
+            unchecked[0] += rec["status"] != "error" and not failed
         click.echo(f"[{i}/{len(jobs)}] {rec['source']}  {rec['status']}  ssim={score}"
-                   + (f"  {rec['error']}" if rec["status"] == "error" else ""))
+                   + (f"  {rec['error']}" if rec["status"] == "error" else "")
+                   + ("  self-check failed" if failed else ""))
 
     if workers <= 1 or len(jobs) <= 1:
         for i, job in enumerate(jobs, 1):
@@ -206,6 +222,8 @@ def run(input_dir, out_dir, prov_csv, default_license, workers, force, **kw):
                else "nothing new to process")
     if unchecked[0]:
         click.echo(NO_CHECK, err=True)
+    if unsure:
+        click.echo(_check_failed([name for name, _ in unsure], unsure[0][1]), err=True)
 
 
 # --------------------------------------------------------------------------- report

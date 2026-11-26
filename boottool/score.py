@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 from skimage.metrics import structural_similarity
 
 from .preprocess import Prepared
+
+
+class NoRasteriser(RuntimeError):
+    """Neither rsvg-convert nor cairosvg is installed: there is nothing to draw an SVG with."""
 
 
 def rasterize(svg_text: str, w: int, h: int) -> np.ndarray:
@@ -29,8 +34,8 @@ def rasterize(svg_text: str, w: int, h: int) -> np.ndarray:
             return np.asarray(Image.open(dst).convert("RGB"), dtype=np.uint8).copy()
     try:
         import cairosvg
-    except ImportError as e:
-        raise RuntimeError(
+    except (ImportError, OSError) as e:                     # (OSError: cairosvg is there, the cairo library it loads is not)
+        raise NoRasteriser(
             "No SVG rasterizer found. Install librsvg (rsvg-convert) or `pip install cairosvg`."
         ) from e
     import io
@@ -57,11 +62,38 @@ NO_SCORES = {"ssim_target": None, "ssim_source": None, "mae_target": None}
 
 def score_or_none(svg_text: str, prep: Prepared) -> dict:
     """Like score_svg, but the self-check is optional: it needs an SVG rasteriser (rsvg-convert or
-    cairosvg). Without one everything still works; the scores are just None."""
+    cairosvg). Without one everything still works; the scores are just None.
+
+    A check that could run and went wrong is another matter (the rasteriser could not read the SVG,
+    or crashed): the scores are None then too, since the SVG itself is done, but "error" says what
+    happened, so that it is not passed off as "no rasteriser installed"."""
     try:
         return score_svg(svg_text, prep)
-    except (RuntimeError, OSError, subprocess.CalledProcessError):
+    except NoRasteriser:
         return dict(NO_SCORES)
+    except Exception as e:  # noqa: BLE001 - whatever went wrong in the check, the SVG is not lost for it
+        return {**NO_SCORES, "error": _why(e)}
+
+
+def _why(e: Exception) -> str:
+    """A failed self-check in a line: what the rasteriser said, or else the error itself. (It is
+    shown on the command line and kept in the manifest: no temporary paths, nothing unprintable,
+    not too long.)"""
+    said = getattr(e, "stderr", None)
+    if isinstance(said, bytes):
+        said = said.decode("utf-8", "replace")
+
+    def line(text):
+        text = "".join(c if c.isprintable() else " " for c in str(text or ""))
+        return " ".join(re.sub(r"\S*[/\\](in\.svg|out\.png)\b", r"\1", text).split())
+    if isinstance(e, subprocess.CalledProcessError):
+        how = f"crashed (signal {-e.returncode})" if e.returncode < 0 else f"stopped with exit code {e.returncode}"
+        text = "rsvg-convert: " + (line(said) or how)
+    elif isinstance(e, (FileNotFoundError, UnidentifiedImageError)) and "out.png" in str(e):
+        text = "rsvg-convert gave no picture that can be read"
+    else:
+        text = f"{type(e).__name__}: {line(e)}" if line(e) else type(e).__name__
+    return text if len(text) <= 300 else text[:299] + "…"
 
 
 def score_svg(svg_text: str, prep: Prepared) -> dict:

@@ -23,7 +23,7 @@ def run_pipeline(path, p: Params | None = None, score: bool = True) -> Result:
     """preprocess -> trace -> simplify -> score for a single image.
 
     score=False skips the re-render and SSIM step (used by the live UI preview). The scores are
-    None when no SVG rasteriser is installed.
+    None when no SVG rasteriser is installed, and None with an "error" when the check went wrong.
     """
     p = p or Params()
     prep = prepare(path, p)
