@@ -31,6 +31,7 @@ from . import separate as sep
 from .config import Params
 from .page import coerce_page, compose, layered_svg, plates_zip
 from .preprocess import prepare
+from .raster import check as check_films, films_zip
 from .score import score_or_none
 from .simplify import postprocess, svg_stats
 from .trace import get_tracer
@@ -167,6 +168,18 @@ def _plate_job(engine: "Engine", tool: str, image_id: str, raw: dict):
     else:
         engine.jobs.move_to_end(key)
     return job
+
+
+def films_response(engine: "Engine", req: dict) -> bytes:
+    """A .zip of the plates as pictures (PNG or TIFF) at the resolution asked for."""
+    fmt, dpi = str(req.get("format", "png")), req.get("dpi", 600)
+    check_films(fmt, dpi)                                                # (before the plates are made: that can take a while)
+    if isinstance(req.get("params"), dict):
+        req = {**req, "params": {**req["params"], "draft": False}}      # files are never drafts
+    with engine.lock:
+        job = _plate_job(engine, req.get("tool", ""), req["id"], req)
+    # drawn after the lock is let go: it takes some seconds, and the plates themselves are finished and not changed
+    return films_zip(job, fmt, dpi)
 
 
 def plates_response(engine: "Engine", req: dict):
@@ -319,6 +332,8 @@ def make_server(host: str = "127.0.0.1", port: int = 8765) -> ThreadingHTTPServe
                 if self.path == "/api/download":
                     data, ctype = download_response(engine, json.loads(body))
                     return self._send(200, data, ctype)
+                if self.path == "/api/films":
+                    return self._send(200, films_response(engine, json.loads(body)), "application/zip")
                 if self.path == "/api/design":
                     return self._json(200, design_response(engine, json.loads(body)))
                 if self.path == "/api/prints/save":

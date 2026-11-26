@@ -9,7 +9,7 @@ description = "Boot Tool: raster to SVG, halftones and screen-print colour separ
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
-    "pillow",
+    "pillow>=10.1",
     "opencv-python-headless",
     "scikit-image",
     "scipy",

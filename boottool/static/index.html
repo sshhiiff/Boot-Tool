@@ -279,6 +279,7 @@ textarea{width:100%;height:110px;background:#fff;border:1px solid #000;font:12px
       <h2>Simulate</h2>
       <p>Shows your designs on a T-shirt drawn to real size. Choose the size (XS to XXL, unisex chart), short or long sleeve, front or back, and the shirt colour (or <b>Use Print colour</b>). Hover the <b>Libraries</b> tab at the bottom and click a design from the Convert or Print library to put it on the shirt; add up to 10 per side. Drag to move (it snaps to the centre line), drag a corner to resize, or type Width, Height, From collar and From centre in cm. <b>Centre</b>, <b>Chest</b> and <b>Full front</b> are quick placements. You can also drag a design from the library onto the shirt. The round handle above a selected design rotates it (hold Shift to snap to 15°), or type an angle. <b>Crop designs to the shirt</b> (on by default) hides anything that hangs past the shirt, like a clipping mask. Arrow keys nudge by 1 mm (Shift: 1 cm), Delete removes. <b>Save mock-up as JPG</b> saves the picture; tick <b>Include measurements</b> to add the size lines to it.</p>
       <ul><li>Downloaded plates are always pure black, with registration marks and the ink name on every plate.</li>
+      <li><b>Films as pictures</b> gives each plate as a black-and-white PNG or TIFF at 300, 600 or 1200 dpi, for film printers that do not take SVG. Use your printer's resolution: 600 dpi for screens up to about 55 LPI, 1200 dpi for finer ones (300 dpi is for flat colours and coarse dithers). The ink name on these is in plain letters only: accents are left off, and letters of other alphabets show as "?".</li>
       <li>The ink name is live text in Arial Narrow. In Illustrator use Type → Create Outlines if you need it as shapes.</li>
       <li>Everything runs on your own computer. Nothing is uploaded anywhere.</li></ul>
     </div>
@@ -805,7 +806,34 @@ const pageBoxes = () => [
     {t: "slider", g: "page", k: "mark_weight_pt", l: "Line weight", min: .5, max: 4, step: .25, f: v => v + " pt", show: () => PG.marks},
     {t: "checks", g: "page", list: [{k: "ink_names", l: "Print ink name on each plate"}]}]),
   downloadBox().build(),
+  filmBox().build(),
 ];
+let filmDpi = 600, filmBusy = false;
+function filmBox() {                                  // the plates as pictures, for film printers that do not take SVG
+  return {build: () => {
+    const b = el("div", "box"); b.style.borderBottom = "0"; b.append(el("div", "bh", "Films as pictures"));
+    b.append(el("div", "cell", `<div class="hint" style="margin:0">For film printers and programs that want a picture instead of an SVG: one black-and-white picture per plate, at its real size, with the registration marks and the ink name.</div>`));
+    const s = el("div", "cells");
+    for (const d of [300, 600, 1200]) { const c = el("span", filmDpi === d ? "on" : "", d + " dpi"); c.onclick = () => { filmDpi = d; renderSide(); }; s.append(c); }
+    const p = el("button", "btn", "PNG — .zip, one per plate"), t = el("button", "btn", "TIFF — .zip, one per plate");
+    p.disabled = t.disabled = !lastRes || !lastRes.plates.length; dlBtns.push(p, t);
+    p.onclick = () => dlFilms("png"); t.onclick = () => dlFilms("tiff"); b.append(s, p, t); return b;
+  }};
+}
+async function dlFilms(format) {
+  if (!imageId) return;
+  if (filmBusy) return toast("Still making the films…");               // one at a time: a second click must not start it again
+  const name = `${fileName}-${tool}-films-${filmDpi}dpi-${format}.zip`;  // named now: another picture may be open by the time it arrives
+  filmBusy = true; toast("Making the films…");
+  const note = setInterval(() => toast("Still making the films…"), 5000);   // fine films take a while, and a note goes away after 6 seconds
+  try {
+    const r = await fetch("/api/films", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({...payload(0), format, dpi: filmDpi})});
+    if (!r.ok) { const j = await r.json(); throw new Error(j.error); }
+    const u = URL.createObjectURL(await r.blob()), a = document.createElement("a"); a.href = u; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(u), 4000);
+    toast("Films downloaded.");
+  } catch (e) { toast(e.message); }
+  finally { clearInterval(note); filmBusy = false; }
+}
 
 const TOOLS = {
   convert: () => [
